@@ -290,6 +290,13 @@ TOOL_UA = ("powershell", "curl/", "wget", "python-requests", "python-urllib", "c
            "microsoft bits")
 
 
+def _cert_check(host, h):
+    """OCSP / CRL / CA-certificate fetches are plain HTTP by design (the response is signed), not a privacy leak."""
+    first = host.split(".", 1)[0].lower()
+    return (first.startswith(("ocsp", "crl", "cacerts", "cdp")) or "ocsp" in h.get("ctype", "")
+            or h.get("path", "").lower().endswith((".crl", ".crt", ".p7c", ".cer")))
+
+
 class Cleartext(Detector):
     name = "cleartext"
 
@@ -347,7 +354,7 @@ class Cleartext(Detector):
                      f"{' from a bare IP address with no domain name' if bare_ip else ''}; scripts and executables fetched this "
                      f"way are a common malware delivery step.", client, server, key=(self.name, "dl", client, url[:200]),
                      evidence={"url": url[:200], "ua": h["ua"][:160]})
-        if is_public(server) and not known_service(host) and host not in self.http_hosts:
+        if is_public(server) and not known_service(host) and not _cert_check(host, h) and host not in self.http_hosts:
             self.http_hosts.add(host)
             eng.emit(p.ts, self.name, "policy_risk", 0, "Unencrypted web traffic",
                      f"{eng.label(client)} browsed {url[:120]} over plain HTTP (not HTTPS).", client, server,
