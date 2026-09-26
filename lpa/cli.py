@@ -7,6 +7,7 @@
   lpa live --source follow:C:\\cap\\ring.pcapng    analyse a capture file while another tool writes it
   lpa synth demo.pcap                            write a synthetic capture with benign traffic plus one example of each attack
   lpa laya-check                                 check the local Laya server and time one triage question
+  lpa install-shortcut [--laya-start CMD]        Windows: Desktop + Start menu shortcut that starts everything
 """
 import argparse, os, sys, threading, time, webbrowser
 
@@ -17,6 +18,28 @@ from .laya import LayaClient, Pipeline
 from .model import SEVERITIES
 from .netutil import human_bytes
 from .outputs import Console, JsonLines
+
+
+def ensure_laya(args):
+    """If no Laya server answers and a start command is configured (--laya-start / LPA_LAYA_START), run it and wait
+    for the server to come up. Runs before any UAC relaunch, in the user's own (non-elevated) session."""
+    cmd = getattr(args, "laya_start", None) or os.environ.get("LPA_LAYA_START")
+    if args.no_laya or not cmd:
+        return
+    c = LayaClient(args.laya_url)
+    if c.health():
+        return
+    import subprocess
+    print(f"[lpa] no Laya server answering - starting it: {cmd}")
+    try:
+        subprocess.Popen(cmd, shell=True)
+    except OSError as e:
+        print(f"[lpa] could not run the Laya start command: {e}"); return
+    for _ in range(180):                            # accelerator servers can take a while to load their model
+        time.sleep(1)
+        if c.health():
+            print(f"[lpa] Laya is up at {c.url}"); return
+    print("[lpa] Laya did not come up within 3 minutes; continuing with detectors only (it is re-checked every 15 s)")
 
 
 def build(args, source_desc, live):
@@ -150,6 +173,7 @@ def keep_open(dash, sampler, stop):
 
 
 def cmd_analyse(args):
+    ensure_laya(args)
     for f in args.files:
         if not os.path.exists(f):
             sys.exit(f"no such file: {f}")
@@ -213,6 +237,7 @@ def relaunch_elevated(args):
 
 
 def cmd_live(args):
+    ensure_laya(args)
     stop = threading.Event()
     src = args.source
     if src == "pktmon":
@@ -260,6 +285,41 @@ def cmd_synth(args):
     print(f"wrote {n} packets to {args.out}")
 
 
+def cmd_install_shortcut(args):
+    """Create 'Laya Packet Analyser' shortcuts (Desktop + Start menu) that run lpa.cmd = live capture + dashboard."""
+    if os.name != "nt":
+        sys.exit("shortcuts are for Windows; on Linux run: python3 -m lpa live --source iface:<name>")
+    import subprocess
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target = os.path.join(root, "lpa.cmd")
+    if not os.path.exists(target):
+        sys.exit(f"{target} not found (run this from the folder that contains lpa.cmd and the lpa package)")
+    extra = ["--jsonl", os.path.join(root, "live-alerts.jsonl")]
+    if args.laya_start:
+        extra += ["--laya-start", args.laya_start]
+    arguments = subprocess.list2cmdline(extra)
+    ps = r"""
+$ErrorActionPreference = 'Stop'
+$sh = New-Object -ComObject WScript.Shell
+$made = @()
+foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {
+  $lnk = $sh.CreateShortcut((Join-Path $dir 'Laya Packet Analyser.lnk'))
+  $lnk.TargetPath = $env:LPA_T; $lnk.Arguments = $env:LPA_A; $lnk.WorkingDirectory = $env:LPA_W
+  $lnk.IconLocation = "$env:SystemRoot\System32\imageres.dll,78"
+  $lnk.Description = 'Live network security analysis of this PC, triaged by a local Laya model'
+  $lnk.Save(); $made += $lnk.FullName
+}
+$made -join "`n"
+"""
+    env = {**os.environ, "LPA_T": target, "LPA_A": arguments, "LPA_W": root}
+    r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        sys.exit("could not create shortcuts: " + (r.stderr or r.stdout).strip()[:400])
+    print("created:\n  " + "\n  ".join(r.stdout.strip().splitlines()))
+    print("Double-click it: it starts Laya if needed" + (" (via --laya-start)" if args.laya_start else "") +
+          ", asks for Administrator rights (UAC) and opens the dashboard.")
+
+
 def cmd_laya_check(args):
     c = LayaClient(args.laya_url)
     info = c.health()
@@ -286,6 +346,8 @@ def main(argv=None):
         p.add_argument("--laya-url", help="Laya server base URL (default: first of :8002 npu, :8001 gpu, :8004, :8000 cpu)")
         p.add_argument("--laya-timeout", type=float, default=10.0)
         p.add_argument("--no-laya", action="store_true", help="heuristics only")
+        p.add_argument("--laya-start", metavar="CMD", help="command that starts a Laya server if none is answering "
+                                                            "(default: $LPA_LAYA_START)")
         p.add_argument("--no-review", action="store_true", help="Laya triages alerts only; do not review every conversation")
         p.add_argument("--flag-at", type=float, default=0.90, help="p(threat) at which a Laya review alone raises an alert "
                                                                      "(0.70 when corroborated by payload / port / ICMP data)")
@@ -314,6 +376,10 @@ def main(argv=None):
 
     p = sub.add_parser("synth", help="write a synthetic demo capture")
     p.add_argument("out"); p.add_argument("--seed", type=int, default=7); p.set_defaults(fn=cmd_synth)
+
+    p = sub.add_parser("install-shortcut", help="Windows: add 'Laya Packet Analyser' to the Desktop and Start menu")
+    p.add_argument("--laya-start", metavar="CMD", help="command the shortcut runs to start a Laya server when none answers")
+    p.set_defaults(fn=cmd_install_shortcut)
 
     p = sub.add_parser("laya-check", help="check the Laya server")
     p.add_argument("--laya-url"); p.set_defaults(fn=cmd_laya_check)

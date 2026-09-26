@@ -28,7 +28,14 @@ lpa.cmd analyse C:\captures\wifi.pcapng           # a pcap / pcapng file instead
 lpa.cmd synth demo.pcap                            # synthetic capture: benign traffic + 22 kinds of attack
 lpa.cmd analyse demo.pcap --replay 20              # replay it at 20x real time
 lpa.cmd laya-check                                 # is Laya up, and how fast is one triage?
+lpa.cmd install-shortcut                           # Desktop + Start menu shortcut (see below)
 ```
+
+**One-click start (Windows):** `lpa.cmd install-shortcut` adds **Laya Packet Analyser** to the Desktop and the
+Start menu. Double-clicking it starts live capture: you accept the UAC prompt and the dashboard opens. Add
+`--laya-start "<command>"` (or set `LPA_LAYA_START`) so that a missing Laya server is started first; the analyser
+waits up to 3 minutes for it. Example, for a server script kept inside WSL:
+`lpa.cmd install-shortcut --laya-start "wsl.exe -e /path/to/serve start npu"`.
 
 `win\lpa.cmd` runs the package with the Windows `py` launcher; set `LPA_PYTHON` to use a specific python.exe.
 Without the launcher, set `PYTHONPATH` to the repo and run `python -m lpa`. On Linux, file analysis works
