@@ -199,6 +199,28 @@ def write_status(url):
         pass
 
 
+def clear_status():
+    st = read_status()
+    if st and st.get("pid") == os.getpid():
+        try:
+            os.remove(STATUS_FILE)
+        except OSError:
+            pass
+
+
+def running_instance():
+    """The recorded analyser, but only if it is really still serving (its dashboard answers with the same pid)."""
+    st = read_status()
+    if not st:
+        return None
+    import json, urllib.request
+    try:
+        with urllib.request.urlopen(st["url"] + "api/state?since=1e12", timeout=2) as r:
+            return st if json.load(r).get("pid") == st.get("pid") else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def read_status():
     import json
     try:
@@ -217,10 +239,10 @@ def relaunch_elevated(args):
     import ctypes, subprocess
     user_args = [a for a in sys.argv[1:] if a != "live"]
     params = subprocess.list2cmdline(["live", *user_args, "--pause-on-exit", "--no-browser"])
-    prev = read_status()
+    prev = running_instance()
     if prev:
-        print(f"[lpa] note: an analyser started at {time.strftime('%H:%M:%S', time.localtime(prev['started']))} "
-              f"(pid {prev['pid']}) may still be running - close its window if so")
+        print(f"[lpa] note: the analyser started at {time.strftime('%H:%M:%S', time.localtime(prev['started']))} "
+              f"(pid {prev['pid']}) is still running at {prev['url']} - close its window if you meant to replace it")
     launched = time.time()
     rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", cmd, params, os.path.dirname(cmd), 1)
     if rc <= 32:                                     # <= 32 is an error, e.g. the UAC prompt was declined
@@ -272,6 +294,7 @@ def cmd_live(args):
         wall = run_stream(eng, pipe, sampler, packets, True, stop)
     finally:
         stop.set()
+        clear_status()                               # so the next launch doesn't warn about an instance that has gone
         if src == "pktmon":
             pm.stop()
     summary(eng, pipe, wall)
