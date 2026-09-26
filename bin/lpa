@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Run the analyser as a native Windows process from WSL (so it can reach Laya on Windows loopback and capture with pktmon).
+#   bin/lpa                                  live capture (the default; raises a UAC prompt)
+#   bin/lpa analyse samples/demo.pcap        WSL paths to existing files are converted automatically
+#   bin/lpa laya-check
+# The code is mirrored to %USERPROFILE%\laya-packet-analyser (override with LPA_WINDIR, a WSL path) and run with
+# LPA_PYTHON (a WSL path to python.exe) or else the Windows 'py' launcher.
+set -euo pipefail
+PROJ=$(cd "$(dirname "$0")/.." && pwd)
+if [ -z "${LPA_WINDIR:-}" ]; then
+  up=$(cd /mnt/c && cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')
+  LPA_WINDIR="$(wslpath -u "$up")/laya-packet-analyser"
+fi
+WIN=$LPA_WINDIR; WINW=$(wslpath -w "$WIN" 2>/dev/null || true)
+mkdir -p "$WIN/lpa"; cp "$PROJ"/lpa/*.py "$PROJ"/lpa/*.html "$WIN/lpa/"; cp "$PROJ/win/lpa.cmd" "$WIN/lpa.cmd"
+[ -z "$WINW" ] && WINW=$(wslpath -w "$WIN")
+if [ -n "${LPA_PYTHON:-}" ]; then PY=("$LPA_PYTHON"); else PY=(py.exe -3); fi
+args=()
+for a in "$@"; do
+  if [ -e "$a" ] && [[ "$a" != -* ]]; then args+=("$(wslpath -w "$(realpath "$a")")")
+  elif [[ "$a" == follow:* ]]; then args+=("follow:$(wslpath -w "$(realpath -m "${a#follow:}")")")
+  else args+=("$a"); fi
+done
+cd "$WIN"
+PYTHONPATH="$WINW" WSLENV="${WSLENV:+$WSLENV:}PYTHONPATH/w:LAYA_API_KEY" exec "${PY[@]}" -X utf8 -m lpa "${args[@]}"

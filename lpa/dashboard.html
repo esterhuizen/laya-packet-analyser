@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Laya Packet Analyser</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --s-blue: #2a78d6; --s-orange: #eb6834; --s-aqua: #1baf7a; --s-violet: #4a3aa7; --s-magenta: #e87ba4;
+  --sev-info: #898781; --sev-low: #6da7ec; --sev-medium: #fab219; --sev-high: #ec835a; --sev-critical: #d03b3b;
+  --good: #0ca30c; --good-text: #006300; --accent: #2a78d6;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s-blue: #3987e5; --s-orange: #d95926; --s-aqua: #199e70; --s-violet: #9085e9; --s-magenta: #d55181;
+    --sev-low: #5598e7; --good-text: #0ca30c; --accent: #3987e5;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --s-blue: #3987e5; --s-orange: #d95926; --s-aqua: #199e70; --s-violet: #9085e9; --s-magenta: #d55181;
+  --sev-low: #5598e7; --good-text: #0ca30c; --accent: #3987e5;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--ink); }
+body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 1480px; margin: 0 auto; padding: 20px 24px 48px; }
+header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.brand { display: flex; align-items: center; gap: 12px; margin-right: auto; }
+.logo { width: 34px; height: 34px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border);
+        display: grid; place-items: center; box-shadow: var(--shadow); }
+.brand h1 { font-size: 18px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+.brand .sub { color: var(--muted); font-size: 12.5px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 999px;
+        background: var(--surface); border: 1px solid var(--border); color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.live { background: var(--good); box-shadow: 0 0 0 0 rgba(12,163,12,.6); animation: pulse 2s infinite; }
+.dot.down { background: var(--sev-critical); }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(12,163,12,.55); } 70% { box-shadow: 0 0 0 8px rgba(12,163,12,0); } 100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); } }
+button.chip { cursor: pointer; font: inherit; font-size: 12.5px; }
+button.chip:hover { color: var(--ink); }
+.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; color: var(--ink-2); font: inherit; font-size: 12.5px; padding: 4px 11px; border-radius: 999px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); min-width: 0; }
+.card h2 { font-size: 13px; font-weight: 600; margin: 0; color: var(--ink); }
+.card .hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.card-head .now { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpis { display: grid; grid-template-columns: 1.6fr repeat(5, 1fr); gap: 14px; margin-bottom: 14px; }
+.kpi .label { color: var(--ink-2); font-size: 12.5px; }
+.kpi .value { font-size: 28px; font-weight: 650; letter-spacing: -.02em; margin-top: 6px; line-height: 1.1; }
+.kpi.hero .value { font-size: 48px; }
+.kpi .foot { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.kpi .foot b { color: var(--ink-2); font-weight: 600; }
+.spark { width: 100%; height: 34px; display: block; margin-top: 8px; }
+.sevbar { display: flex; gap: 2px; height: 8px; margin-top: 10px; border-radius: 4px; overflow: hidden; background: var(--surface-2); }
+.sevbar span { display: block; height: 100%; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.chart { position: relative; height: 200px; }
+.chart canvas { width: 100%; height: 100%; display: block; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.legend i.sq { width: 10px; height: 10px; border-radius: 3px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+       padding: 8px 10px; font-size: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.18); white-space: nowrap; z-index: 5; display: none; }
+.tip .t { color: var(--muted); margin-bottom: 4px; }
+.tip .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.tip .r span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--ink); }
+.tip i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.bars .row { display: grid; grid-template-columns: 130px 1fr 64px; align-items: center; gap: 10px; height: 26px; font-size: 12.5px; }
+.bars .row .name { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bars .row .track { display: block; height: 10px; background: var(--surface-2); border-radius: 0 5px 5px 0; overflow: hidden; }
+.bars .row .fill { display: block; height: 100%; border-radius: 0 4px 4px 0; transition: width .4s ease; }
+.bars .row .val { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+td { padding: 7px 8px; border-bottom: 1px solid var(--grid); color: var(--ink-2); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td .strong { color: var(--ink); }
+.svc { color: var(--muted); font-size: 11.5px; }
+.feed-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.alert { display: grid; grid-template-columns: 112px 1fr 220px; gap: 16px; padding: 14px 4px; border-bottom: 1px solid var(--grid); cursor: pointer; }
+.alert:hover { background: var(--surface-2); }
+.alert:last-child { border-bottom: 0; }
+.sev { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--ink); }
+.sev svg { flex: none; }
+.alert .when { color: var(--muted); font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.alert .title { font-weight: 600; color: var(--ink); }
+.alert .title .count { font-weight: 500; color: var(--muted); font-size: 12px; margin-left: 6px; }
+.alert .story { color: var(--ink-2); margin-top: 3px; font-size: 13px; }
+.alert pre { margin: 10px 0 0; padding: 10px; background: var(--surface-2); border-radius: 8px; font-size: 11.5px; color: var(--ink-2); white-space: pre-wrap; word-break: break-all; display: none; }
+.alert.open pre { display: block; }
+.laya { font-size: 12px; color: var(--ink-2); }
+.laya .v { font-weight: 650; color: var(--ink); text-transform: capitalize; }
+.laya .meter { height: 6px; background: var(--surface-2); border-radius: 3px; margin: 6px 0 4px; overflow: hidden; }
+.laya .meter span { display: block; height: 100%; border-radius: 3px; }
+.laya .adj { color: var(--muted); }
+.empty { color: var(--muted); padding: 28px 0; text-align: center; }
+.verdict { display: flex; height: 26px; border-radius: 6px; overflow: hidden; gap: 2px; margin: 8px 0 12px; background: var(--surface-2); }
+.verdict span { display: block; height: 100%; transition: flex-grow .4s ease; }
+.statline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; font-size: 12.5px; }
+.statline div { display: flex; justify-content: space-between; border-bottom: 1px solid var(--grid); padding-bottom: 6px; }
+.statline span:first-child { color: var(--ink-2); }
+.statline span:last-child { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+.calls-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.calls-tools input { height: 30px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+  padding: 0 12px; font: inherit; font-size: 12.5px; width: 220px; }
+.call { border-bottom: 1px solid var(--grid); }
+.call:last-child { border-bottom: 0; }
+.call-row { display: grid; grid-template-columns: 78px 150px minmax(0, 1.2fr) minmax(0, 1fr) 64px 14px; gap: 12px; align-items: center;
+  padding: 9px 4px; cursor: pointer; font-size: 12.5px; }
+.call-row:hover { background: var(--surface-2); }
+.call-row .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.call-row .subj { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-row .ans { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.call-row .ms { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.call-row .chev { color: var(--muted); transition: transform .15s; }
+.call.open .chev { transform: rotate(90deg); }
+.purpose { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+.purpose i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.call-body { display: none; grid-template-columns: 1fr 1fr; gap: 14px; padding: 4px 4px 14px; }
+.call.open .call-body { display: grid; }
+.call-body h3 { font-size: 11.5px; font-weight: 600; color: var(--muted); margin: 0 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+.call-body pre { margin: 0; padding: 10px; background: var(--surface-2); border-radius: 8px; font-size: 11.5px; color: var(--ink-2);
+  white-space: pre-wrap; word-break: break-word; max-height: 420px; overflow: auto; }
+.answer-cards { display: grid; gap: 8px; margin-bottom: 10px; }
+.acard { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.acard .q { color: var(--ink-2); margin-bottom: 4px; }
+.acard .a { color: var(--ink); font-weight: 600; }
+.pbar { display: grid; grid-template-columns: 110px 1fr 44px; gap: 8px; align-items: center; font-size: 11.5px; color: var(--ink-2); margin-top: 3px; }
+.pbar .tr { height: 6px; background: var(--surface); border-radius: 3px; overflow: hidden; }
+.pbar .tr span { display: block; height: 100%; background: var(--s-violet); border-radius: 3px; }
+.pbar .v { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .call-row { grid-template-columns: 64px 1fr 56px 14px; } .call-row .purpose, .call-row .ans { display: none; }
+  .call-body { grid-template-columns: 1fr; } }
+footer { color: var(--muted); font-size: 12px; margin-top: 18px; text-align: center; }
+@media (max-width: 1200px) { .kpis { grid-template-columns: repeat(3, 1fr); } .kpi.hero { grid-column: span 3; } .grid3 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 760px) {
+  .wrap { padding: 14px 16px 40px; } .kpis { grid-template-columns: 1fr 1fr; } .kpi.hero { grid-column: span 2; }
+  .grid2, .grid3 { grid-template-columns: 1fr; } .alert { grid-template-columns: 1fr; gap: 6px; } .kpi.hero .value { font-size: 40px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6l7-3z"/><path d="M8.5 12.5h2l1.2-3 1.6 5 1.2-2h1"/></svg>
+      </div>
+      <div><h1>Laya Packet Analyser</h1><div class="sub" id="source">connecting…</div></div>
+    </div>
+    <span class="chip"><span class="dot" id="statusDot"></span><span id="statusText">connecting</span></span>
+    <span class="chip" title="Local Laya server used for triage"><span class="dot" id="layaDot"></span><span id="layaChip">Laya</span></span>
+    <div class="seg" role="group" aria-label="Time range" id="range">
+      <button data-s="60">1m</button><button data-s="300" aria-pressed="true">5m</button><button data-s="900">15m</button><button data-s="0">All</button>
+    </div>
+    <button class="chip" id="theme" title="Toggle light / dark">◐ Theme</button>
+  </header>
+
+  <section class="kpis">
+    <div class="card kpi hero">
+      <div class="label">Packets scanned</div>
+      <div class="value" id="kPackets">0</div>
+      <div class="foot"><b id="kPps">0</b> packets/s now · peak <b id="kPeak">0</b>/s · <span id="kBytes">0 B</span></div>
+      <canvas class="spark" id="sparkPps"></canvas>
+    </div>
+    <div class="card kpi"><div class="label">Throughput</div><div class="value" id="kBps">0</div>
+      <div class="foot">↑ <b id="kUp">0</b> · ↓ <b id="kDown">0</b></div></div>
+    <div class="card kpi"><div class="label">Active flows</div><div class="value" id="kFlows">0</div>
+      <div class="foot"><b id="kFlowsTotal">0</b> seen in total</div></div>
+    <div class="card kpi"><div class="label">Alerts</div><div class="value" id="kAlerts">0</div>
+      <div class="foot"><b id="kHigh">0</b> high or critical</div><div class="sevbar" id="kSevbar"></div></div>
+    <div class="card kpi"><div class="label">Laya calls</div><div class="value" id="kCalls">0</div>
+      <div class="foot"><b id="kQuestions">0</b> questions · <b id="kQueue">0</b> queued</div></div>
+    <div class="card kpi"><div class="label">Avg Laya response</div><div class="value" id="kLat">–</div>
+      <div class="foot">p95 <b id="kP95">–</b> · last min <b id="kLat60">–</b></div></div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <div class="card-head"><div><h2>Packets scanned</h2><div class="hint">Cumulative total</div></div><div class="now" id="nTotal"></div></div>
+      <div class="chart" id="cTotal"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Packets per second</h2><div class="hint">Decoded and checked by all detectors</div></div><div class="now" id="nPps"></div></div>
+      <div class="chart" id="cPps"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Calls to Laya</h2><div class="hint">Cumulative triage requests to the local model</div></div><div class="now" id="nCalls"></div></div>
+      <div class="chart" id="cCalls"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Average Laya response</h2><div class="hint">Mean round-trip per call, milliseconds</div></div>
+        <div class="legend"><span><i style="background:var(--s-violet)"></i>per second</span><span><i style="background:var(--s-aqua)"></i>running average</span></div></div>
+      <div class="chart" id="cLat"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Throughput</h2><div class="hint">Laptop ↔ internet, bytes per second</div></div>
+        <div class="legend"><span><i style="background:var(--s-blue)"></i>download</span><span><i style="background:var(--s-orange)"></i>upload</span></div></div>
+      <div class="chart" id="cBps"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Alerts over time</h2><div class="hint">After Laya triage, by final severity</div></div>
+        <div class="legend" id="sevLegend"></div></div>
+      <div class="chart" id="cAlerts"></div>
+    </div>
+  </section>
+
+  <section class="grid3">
+    <div class="card">
+      <div class="card-head"><div><h2>Laya verdicts</h2><div class="hint">How the model judged the detectors' evidence</div></div></div>
+      <div class="verdict" id="verdictBar"></div>
+      <div class="legend" id="verdictLegend" style="margin-bottom:14px"></div>
+      <div class="statline" id="layaStats"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Threat categories</h2><div class="hint">Alerts of low severity and above</div></div></div>
+      <div class="bars" id="bCats"></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Protocol mix</h2><div class="hint">Packets by protocol</div></div></div>
+      <div class="bars" id="bProto"></div>
+    </div>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <div class="card-head"><div><h2>Top internet hosts</h2><div class="hint">By bytes exchanged</div></div></div>
+      <table><thead><tr><th>Host</th><th>Name</th><th class="num">Bytes</th></tr></thead><tbody id="tRemote"></tbody></table>
+    </div>
+    <div class="card">
+      <div class="card-head"><div><h2>Top domains</h2><div class="hint">By DNS queries</div></div></div>
+      <table><thead><tr><th>Domain</th><th>Known service</th><th class="num">Queries</th></tr></thead><tbody id="tDomains"></tbody></table>
+    </div>
+  </section>
+
+  <section class="card" id="callsCard" style="margin-bottom:14px">
+    <div class="card-head">
+      <div><h2>Laya calls</h2><div class="hint">Every request to the local Laya server (Jev-compatible <code>POST /v1/systemone</code>) and its answer. Click a call to see the full request and response.</div></div>
+      <div class="calls-tools">
+        <div class="seg" role="group" aria-label="Call purpose" id="callFilter">
+          <button data-v="" aria-pressed="true">All</button><button data-v="conversation">Conversations</button><button data-v="alert triage">Alert triage</button><button data-v="domain check">Domains</button><button data-v="device review">Devices</button>
+        </div>
+        <input id="callSearch" type="search" placeholder="Filter by host, domain, answer…" aria-label="Filter calls">
+        <button class="chip" id="callPause" aria-pressed="false">❚❚ Pause</button>
+      </div>
+    </div>
+    <div class="statline" id="callStats" style="grid-template-columns:repeat(4,1fr);margin-bottom:6px"></div>
+    <div id="calls"><div class="empty">No Laya calls yet.</div></div>
+  </section>
+
+  <section class="card" id="reviewCard" style="margin-bottom:14px">
+    <div class="card-head">
+      <div><h2>Laya live review</h2><div class="hint">Every conversation and local device, classified by Laya on the NPU, highest threat score first</div></div>
+      <div class="seg" role="group" aria-label="Review view" id="rvView"><button data-v="top" aria-pressed="true">Highest score</button><button data-v="recent">Most recent</button></div>
+    </div>
+    <div class="statline" id="rvStats" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px"></div>
+    <table><thead><tr><th style="width:150px">Laya threat score</th><th>Conversation</th><th>Category</th><th class="num">ms</th></tr></thead>
+      <tbody id="rvTable"></tbody></table>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div><h2>Security alerts</h2><div class="hint">Detector evidence with Laya's verdict. Click an alert for its evidence.</div></div>
+      <div class="feed-tools">
+        <div class="seg" role="group" aria-label="Minimum severity" id="minsev">
+          <button data-v="0">All</button><button data-v="1" aria-pressed="true">Low+</button><button data-v="2">Medium+</button><button data-v="3">High+</button>
+        </div>
+      </div>
+    </div>
+    <div id="feed"><div class="empty">No alerts yet.</div></div>
+  </section>
+  <section class="card" id="healthCard" style="margin-top:14px">
+    <div class="card-head"><div><h2>Capture health</h2><div class="hint">Frames read vs. decoded, pktmon copies of the same packet, this app's own traffic (dashboard, Laya, lookups) left out, and any capture messages</div></div></div>
+    <div class="statline" id="health"></div>
+    <div id="log" style="margin-top:12px;font-size:12px;color:var(--ink-2)"></div>
+  </section>
+  <footer id="foot">Laya Packet Analyser · data refreshes every second · served on loopback only</footer>
+</div>
+
+<script>
+"use strict";
+const SEVS = ["info", "low", "medium", "high", "critical"];
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
+let range = 300, minSev = 1, series = [], lastT = 0, peak = 0, openIds = new Set(), latest = null;
+
+// ---------------------------------------------------------------- formatting
+const nf = new Intl.NumberFormat();
+function compact(v) {
+  if (v == null || isNaN(v)) return "–";
+  const a = Math.abs(v);
+  if (a >= 1e9) return (v / 1e9).toFixed(a >= 1e10 ? 0 : 1) + "B";
+  if (a >= 1e6) return (v / 1e6).toFixed(a >= 1e7 ? 0 : 1) + "M";
+  if (a >= 1e4) return (v / 1e3).toFixed(a >= 1e5 ? 0 : 1) + "K";
+  return nf.format(Math.round(v));
+}
+function bytes(v, rate) {
+  if (v == null) return "–";
+  const u = ["B", "kB", "MB", "GB", "TB"]; let i = 0;
+  while (Math.abs(v) >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+  return (i ? v.toFixed(v >= 100 ? 0 : 1) : Math.round(v)) + " " + u[i] + (rate ? "/s" : "");
+}
+const ms = v => v == null ? "–" : (v >= 100 ? Math.round(v) : v.toFixed(1)) + " ms";
+const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function niceStep(v, integer) {        // 1 / 2 / 2.5 / 5 x 10^k, so four gridlines land on round numbers
+  if (!(v > 0)) return 1;
+  const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e;
+  const s = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * e;
+  return integer ? Math.max(1, Math.ceil(s)) : s;
+}
+
+// ---------------------------------------------------------------- canvas time-series chart with crosshair tooltip
+class Chart {
+  constructor(host, opts) {
+    this.host = host; this.o = opts;
+    this.cv = document.createElement("canvas"); host.appendChild(this.cv);
+    this.tip = document.createElement("div"); this.tip.className = "tip"; host.appendChild(this.tip);
+    this.hover = null; this.data = null;
+    this.cv.addEventListener("mousemove", e => { const r = this.cv.getBoundingClientRect(); this.hover = e.clientX - r.left; this.draw(); });
+    this.cv.addEventListener("mouseleave", () => { this.hover = null; this.draw(); });
+    new ResizeObserver(() => this.draw()).observe(host);
+  }
+  set(data) { this.data = data; this.draw(); }
+  draw() {
+    const d = this.data, cv = this.cv, o = this.o;
+    const W = this.host.clientWidth, H = this.host.clientHeight, dpr = window.devicePixelRatio || 1;
+    if (!W || !H) return;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    const L = 52, R = 10, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
+    g.font = "11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    if (!d || d.t.length < 2) {
+      g.fillStyle = css("--muted"); g.textAlign = "center"; g.fillText("waiting for data…", W / 2, H / 2); this.tip.style.display = "none"; return;
+    }
+    const t0 = d.t[0], t1 = d.t[d.t.length - 1], span = Math.max(t1 - t0, 1);
+    let ymax = 0;
+    if (o.stacked) d.t.forEach((_, i) => { let s = 0; d.series.forEach(se => s += se.v[i] || 0); ymax = Math.max(ymax, s); });
+    else d.series.forEach(se => se.v.forEach(v => { if (v != null) ymax = Math.max(ymax, v); }));
+    const step = niceStep(ymax * 1.02 / 4, o.integer), nTicks = Math.max(1, Math.ceil(ymax * 1.02 / step));
+    ymax = step * nTicks;
+    const X = t => L + (t - t0) / span * pw, Y = v => T + ph - v / ymax * ph;
+    // grid + y ticks
+    g.strokeStyle = css("--grid"); g.lineWidth = 1; g.fillStyle = css("--muted"); g.textAlign = "right"; g.textBaseline = "middle";
+    for (let i = 0; i <= nTicks; i++) {
+      const v = step * i, y = Math.round(Y(v)) + .5;
+      g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke();
+      g.fillText(o.yfmt(v), L - 8, y);
+    }
+    g.strokeStyle = css("--axis"); g.beginPath(); g.moveTo(L, Math.round(Y(0)) + .5); g.lineTo(W - R, Math.round(Y(0)) + .5); g.stroke();
+    // x ticks
+    g.textAlign = "center"; g.textBaseline = "top"; g.fillStyle = css("--muted");
+    const nx = Math.max(2, Math.min(6, Math.floor(pw / 110)));
+    for (let i = 0; i <= nx; i++) { const t = t0 + span * i / nx; g.fillText(clock(t), Math.min(Math.max(X(t), L + 24), W - R - 24), H - B + 6); }
+    // marks
+    if (o.stacked) {
+      const n = d.t.length, bw = Math.max(1, Math.min(24, pw / n - 2)), base = new Array(n).fill(0);
+      d.series.forEach(se => {
+        g.fillStyle = css(se.color);
+        for (let i = 0; i < n; i++) {
+          const v = se.v[i] || 0; if (!v) continue;
+          const x = X(d.t[i]) - bw / 2, y0 = Y(base[i]), y1 = Y(base[i] + v);
+          const h = Math.max(1, y0 - y1 - (base[i] ? 2 : 0));
+          const top = base[i] + v === d.series.reduce((s, q) => s + (q.v[i] || 0), 0);
+          roundTop(g, x, y0 - (base[i] ? 2 : 0) - h, bw, h, top ? Math.min(4, bw / 2, h) : 0); g.fill();
+          base[i] += v;
+        }
+      });
+    } else {
+      d.series.forEach(se => {
+        const col = css(se.color);
+        const pts = []; d.t.forEach((t, i) => { if (se.v[i] != null) pts.push([X(t), Y(se.v[i])]); });
+        if (!pts.length) return;
+        if (se.area) {
+          g.beginPath(); g.moveTo(pts[0][0], Y(0)); pts.forEach(p => g.lineTo(p[0], p[1])); g.lineTo(pts[pts.length - 1][0], Y(0)); g.closePath();
+          const gr = g.createLinearGradient(0, T, 0, T + ph); gr.addColorStop(0, hexA(col, .22)); gr.addColorStop(1, hexA(col, .02));
+          g.fillStyle = gr; g.fill();
+        }
+        g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
+        g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = g.lineCap = "round"; g.stroke();
+        const e = pts[pts.length - 1];                               // end dot with surface ring
+        g.beginPath(); g.arc(e[0], e[1], 6, 0, 7); g.fillStyle = css("--surface"); g.fill();
+        g.beginPath(); g.arc(e[0], e[1], 4, 0, 7); g.fillStyle = col; g.fill();
+      });
+    }
+    // hover crosshair + tooltip
+    if (this.hover == null || this.hover < L || this.hover > W - R) { this.tip.style.display = "none"; return; }
+    let bi = 0, bd = 1e9; d.t.forEach((t, i) => { const dd = Math.abs(X(t) - this.hover); if (dd < bd) { bd = dd; bi = i; } });
+    const hx = Math.round(X(d.t[bi])) + .5;
+    g.strokeStyle = css("--axis"); g.lineWidth = 1; g.beginPath(); g.moveTo(hx, T); g.lineTo(hx, T + ph); g.stroke();
+    if (!o.stacked) d.series.forEach(se => {
+      const v = se.v[bi]; if (v == null) return;
+      g.beginPath(); g.arc(hx, Y(v), 6, 0, 7); g.fillStyle = css("--surface"); g.fill();
+      g.beginPath(); g.arc(hx, Y(v), 4, 0, 7); g.fillStyle = css(se.color); g.fill();
+    });
+    let html = `<div class="t">${clock(d.t[bi])}</div>`;
+    (o.stacked ? [...d.series].reverse() : d.series).forEach(se => {
+      html += `<div class="r"><span><i style="background:${css(se.color)}"></i>${esc(se.name)}</span><span>${se.v[bi] == null ? "–" : o.tfmt(se.v[bi])}</span></div>`;
+    });
+    this.tip.innerHTML = html; this.tip.style.display = "block";
+    const tw = this.tip.offsetWidth, left = hx + 14 + tw > W ? hx - 14 - tw : hx + 14;
+    this.tip.style.left = left + "px"; this.tip.style.top = (T + 6) + "px";
+  }
+}
+function roundTop(g, x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x, y + h); g.lineTo(x, y + r); g.quadraticCurveTo(x, y, x + r, y);
+  g.lineTo(x + w - r, y); g.quadraticCurveTo(x + w, y, x + w, y + r); g.lineTo(x + w, y + h); g.closePath();
+}
+function hexA(hex, a) {
+  const m = hex.replace("#", ""); const n = parseInt(m.length === 3 ? m.split("").map(c => c + c).join("") : m, 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+function spark(cv, vals, color) {
+  const W = cv.clientWidth, H = cv.clientHeight, dpr = window.devicePixelRatio || 1; if (!W) return;
+  cv.width = W * dpr; cv.height = H * dpr; const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (vals.length < 2) return;
+  const mx = Math.max(...vals, 1), X = i => i / (vals.length - 1) * (W - 6) + 1, Y = v => H - 3 - v / mx * (H - 8);
+  g.beginPath(); vals.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
+  g.lineTo(X(vals.length - 1), H); g.lineTo(X(0), H); g.closePath(); g.fillStyle = hexA(css(color), .14); g.fill();
+  g.beginPath(); vals.forEach((v, i) => i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)));
+  g.strokeStyle = css(color); g.lineWidth = 2; g.lineJoin = "round"; g.stroke();
+  g.beginPath(); g.arc(X(vals.length - 1), Y(vals[vals.length - 1]), 3.5, 0, 7); g.fillStyle = css(color); g.fill();
+}
+
+const charts = {
+  total: new Chart($("cTotal"), { integer: true, yfmt: compact, tfmt: v => nf.format(v) }),
+  pps: new Chart($("cPps"), { yfmt: compact, tfmt: v => nf.format(Math.round(v)) + " /s" }),
+  calls: new Chart($("cCalls"), { integer: true, yfmt: compact, tfmt: v => nf.format(v) }),
+  lat: new Chart($("cLat"), { yfmt: v => Math.round(v) + "", tfmt: ms }),
+  bps: new Chart($("cBps"), { yfmt: v => bytes(v), tfmt: v => bytes(v, true) }),
+  alerts: new Chart($("cAlerts"), { stacked: true, integer: true, yfmt: v => nf.format(v), tfmt: v => nf.format(v) }),
+};
+
+// ---------------------------------------------------------------- severity visuals (icon + label, never colour alone)
+const SEV_ICON = {
+  info: '<circle cx="8" cy="8" r="6.5"/><path d="M8 7.2v4M8 4.9v.2"/>',
+  low: '<circle cx="8" cy="8" r="6.5"/><path d="M5.5 8h5"/>',
+  medium: '<path d="M8 1.8l6.6 11.5H1.4z"/><path d="M8 6.3v3.2M8 11.4v.2"/>',
+  high: '<path d="M5.2 1.5h5.6l3.7 3.7v5.6l-3.7 3.7H5.2l-3.7-3.7V5.2z"/><path d="M8 4.8v3.8M8 10.8v.2"/>',
+  critical: '<path d="M5.2 1.5h5.6l3.7 3.7v5.6l-3.7 3.7H5.2l-3.7-3.7V5.2z"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4"/>',
+};
+const sevBadge = s => `<span class="sev"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="var(--sev-${s})" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${SEV_ICON[s]}</svg>${s}</span>`;
+$("sevLegend").innerHTML = SEVS.slice(1).map(s => `<span><i class="sq" style="background:var(--sev-${s})"></i>${s}</span>`).join("");
+
+// ---------------------------------------------------------------- controls
+document.querySelectorAll("#range button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#range button").forEach(x => x.setAttribute("aria-pressed", x === b)); range = +b.dataset.s; render();
+});
+document.querySelectorAll("#minsev button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#minsev button").forEach(x => x.setAttribute("aria-pressed", x === b)); minSev = +b.dataset.v; renderFeed();
+});
+try { const t = localStorage.getItem("lpa-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("lpa-theme", document.documentElement.dataset.theme); } catch (e) {}
+  render();
+};
+
+// ---------------------------------------------------------------- rendering
+function windowed() {
+  if (!range || !series.length) return series;
+  const cut = series[series.length - 1].t - range; return series.filter(r => r.t >= cut);
+}
+function bucketed(rows, size) {       // alert counts per bucket for the stacked columns
+  const out = []; let cur = null;
+  rows.forEach(r => {
+    const b = Math.floor(r.t / size) * size;
+    if (!cur || cur.t !== b) { cur = { t: b, sev: Object.fromEntries(SEVS.map(s => [s, 0])) }; out.push(cur); }
+    SEVS.forEach(s => cur.sev[s] += r.sev[s] || 0);
+  });
+  return out;
+}
+function render() {
+  const rows = windowed(), t = rows.map(r => r.t);
+  charts.total.set({ t, series: [{ name: "packets", color: "--s-blue", v: rows.map(r => r.packets), area: true }] });
+  charts.pps.set({ t, series: [{ name: "packets/s", color: "--s-blue", v: rows.map(r => r.pps), area: true }] });
+  charts.calls.set({ t, series: [{ name: "Laya calls", color: "--s-violet", v: rows.map(r => r.laya_calls), area: true }] });
+  let sum = 0, n = 0;
+  const run = rows.map(r => { if (r.laya_ms != null) { sum += r.laya_ms * r.laya_calls_dt; n += r.laya_calls_dt; } return n ? sum / n : null; });
+  charts.lat.set({ t, series: [{ name: "per second", color: "--s-violet", v: rows.map(r => r.laya_ms) }, { name: "running average", color: "--s-aqua", v: run }] });
+  charts.bps.set({ t, series: [{ name: "download", color: "--s-blue", v: rows.map(r => r.bps_in), area: true }, { name: "upload", color: "--s-orange", v: rows.map(r => r.bps_out), area: true }] });
+  const span = rows.length ? rows[rows.length - 1].t - rows[0].t : 0, size = span > 600 ? 30 : span > 120 ? 10 : 5;
+  const bk = bucketed(rows, size);
+  charts.alerts.set({ t: bk.map(b => b.t + size / 2), series: SEVS.slice(1).map(s => ({ name: s, color: "--sev-" + s, v: bk.map(b => b.sev[s]) })) });
+  spark($("sparkPps"), rows.slice(-60).map(r => r.pps), "--s-blue");
+}
+function bars(el, entries, color, fmt) {
+  if (!entries.length) { el.innerHTML = '<div class="empty">Nothing yet.</div>'; return; }
+  const mx = Math.max(...entries.map(e => e[1]), 1);
+  el.innerHTML = entries.map(([k, v]) => `<div class="row"><span class="name" title="${esc(k)}">${esc(k.replace(/_/g, " "))}</span>
+    <span class="track"><span class="fill" style="width:${Math.max(1, v / mx * 100)}%;background:var(${color})"></span></span>
+    <span class="val">${fmt(v)}</span></div>`).join("");
+}
+function renderFeed() {
+  const s = latest; if (!s) return;
+  const list = s.alerts.filter(a => SEVS.indexOf(a.final_severity) >= minSev);
+  if (!list.length) { $("feed").innerHTML = `<div class="empty">${s.alerts.length ? "No alerts at this severity." : "No alerts yet. The detectors are watching."}</div>`; return; }
+  $("feed").innerHTML = list.slice(0, 80).map(a => {
+    const l = a.laya || {};
+    let lay = '<div class="laya"><span class="adj">Laya not consulted</span></div>';
+    if (l.mode === "triage" || l.mode === "domain" || l.mode === "review") {
+      const p = l.p_malicious ?? 0, col = p >= .6 ? "--sev-critical" : p >= .35 ? "--sev-medium" : "--good";
+      const adj = a.final_severity !== a.severity ? `${a.severity} → ${a.final_severity}` : "severity kept";
+      lay = `<div class="laya">Laya: <span class="v">${esc(l.verdict)}</span> · ${Math.round(p * 100)}% threat
+        <div class="meter"><span style="width:${Math.round(p * 100)}%;background:var(${col})"></span></div>
+        <span class="adj">${esc((l.category || l.kind || "").replace(/_/g, " "))} · ${adj} · ${Math.round(l.ms)} ms</span></div>`;
+    } else if (l.mode) lay = `<div class="laya"><span class="adj">Laya unavailable: ${esc(l.reason || "")}</span></div>`;
+    const ev = JSON.stringify({ detector: a.detector, category: a.category, src: a.src, dst: a.dst, evidence: a.evidence, laya: a.laya }, null, 2);
+    return `<div class="alert${openIds.has(a.id) ? " open" : ""}" data-id="${a.id}">
+      <div>${sevBadge(a.final_severity)}<div class="when">${clock(a.ts)}</div></div>
+      <div><div class="title">${esc(a.title)}${a.count > 1 ? `<span class="count">×${a.count}</span>` : ""}</div>
+        <div class="story">${esc(a.story)}</div><pre>${esc(ev)}</pre></div>
+      ${lay}</div>`;
+  }).join("");
+}
+let rvView = "top";
+document.querySelectorAll("#rvView button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#rvView button").forEach(x => x.setAttribute("aria-pressed", x === b)); rvView = b.dataset.v; renderReview();
+});
+function renderReview() {
+  const r = latest && latest.review;
+  if (!r) { $("reviewCard").style.display = "none"; return; }
+  $("reviewCard").style.display = "";
+  $("rvStats").innerHTML = [["Reviewed", nf.format(r.reviewed)], ["Reused (same service)", nf.format(r.cached)],
+    ["Raised as alerts", nf.format(r.flagged)], ["Waiting for Laya", nf.format(r.pending)]]
+    .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+  const rows = (rvView === "top" ? r.top : r.recent).slice(0, 25);
+  $("rvTable").innerHTML = rows.length ? rows.map(x => {
+    const p = x.p ?? 0, col = x.flagged ? "--sev-critical" : p >= .7 ? "--sev-medium" : p >= .5 ? "--sev-low" : "--good";
+    const text = x.state.traffic || x.state.device || "";
+    const extra = x.state.payload ? `<div class="svc">${esc(x.state.payload.slice(0, 160))}</div>` : "";
+    const why = x.why && x.why.length ? ` · ${esc(x.why.join(", "))}` : "";
+    return `<tr><td><div class="laya"><span class="v">${Math.round(p * 100)}%</span>${x.flagged ? " · alert" : ""}
+      <div class="meter"><span style="width:${Math.round(p * 100)}%;background:var(${col})"></span></div></div></td>
+      <td><div class="strong">${esc(text.slice(0, 220))}</div>${extra}</td>
+      <td>${esc((x.category || "").replace(/_/g, " "))}<div class="svc">${x.cached ? "reused verdict" : ""}${why}</div></td>
+      <td class="num">${x.error ? "err" : Math.round(x.ms)}</td></tr>`;
+  }).join("") : '<tr><td colspan="4" class="empty">Laya has not reviewed anything yet (conversations are reviewed after ~8 s).</td></tr>';
+}
+$("feed").addEventListener("click", e => {
+  const el = e.target.closest(".alert"); if (!el) return;
+  const id = +el.dataset.id; openIds.has(id) ? openIds.delete(id) : openIds.add(id); el.classList.toggle("open");
+});
+
+function update(s) {
+  latest = s;
+  const tot = s.totals, L = s.laya;
+  series = series.concat(s.series); if (series.length > 3600) series = series.slice(-3600);
+  if (s.series.length) lastT = s.series[s.series.length - 1].t;
+  const last = series[series.length - 1] || {};
+  peak = Math.max(peak, ...s.series.map(r => r.pps), 0);
+  $("source").textContent = s.source || "";
+  const live = s.status === "live" || s.status === "analysing";
+  $("statusDot").className = "dot" + (live ? " live" : s.status === "error" ? " down" : "");
+  $("statusText").textContent = s.status;
+  $("layaDot").className = "dot" + (!s.laya_enabled ? "" : L.up ? " live" : " down");
+  $("layaChip").textContent = !s.laya_enabled ? "Laya off" : L.up ? `Laya · ${L.backend || "?"}` : "Laya unreachable";
+  $("kPackets").textContent = nf.format(tot.packets);
+  $("kPps").textContent = nf.format(Math.round(last.pps || 0)); $("kPeak").textContent = compact(peak);
+  $("kBytes").textContent = bytes(tot.bytes) + " total";
+  $("kBps").textContent = bytes(last.bps || 0, true);
+  $("kUp").textContent = bytes(tot.bytes_out); $("kDown").textContent = bytes(tot.bytes_in);
+  $("kFlows").textContent = nf.format(tot.flows_active); $("kFlowsTotal").textContent = nf.format(tot.flows_total);
+  const sev = s.severity, nAl = SEVS.reduce((a, k) => a + sev[k], 0);
+  $("kAlerts").textContent = nf.format(nAl); $("kHigh").textContent = nf.format(sev.high + sev.critical);
+  $("kSevbar").innerHTML = nAl ? SEVS.map(k => sev[k] ? `<span title="${k}: ${sev[k]}" style="flex:${sev[k]};background:var(--sev-${k})"></span>` : "").join("") : "";
+  $("kCalls").textContent = nf.format(L.calls); $("kQuestions").textContent = nf.format(L.questions); $("kQueue").textContent = L.queued;
+  $("kLat").textContent = ms(L.avg_ms); $("kP95").textContent = ms(L.p95_ms); $("kLat60").textContent = ms(L.avg_ms_60s);
+  $("nTotal").textContent = nf.format(tot.packets) + " packets";
+  $("nPps").textContent = nf.format(Math.round(last.pps || 0)) + " /s now";
+  $("nCalls").textContent = nf.format(L.calls) + " calls";
+  // verdict split
+  const V = [["benign", "--good"], ["suspicious", "--sev-medium"], ["malicious", "--sev-critical"]];
+  const vt = V.reduce((a, [k]) => a + (s.verdicts[k] || 0), 0);
+  $("verdictBar").innerHTML = vt ? V.map(([k, c]) => s.verdicts[k] ? `<span title="${k}: ${s.verdicts[k]}" style="flex-grow:${s.verdicts[k]};background:var(${c})"></span>` : "").join("") : "";
+  $("verdictLegend").innerHTML = V.map(([k, c]) => `<span><i class="sq" style="background:var(${c})"></i>${k} <b style="color:var(--ink)">${s.verdicts[k] || 0}</b></span>`).join("");
+  $("layaStats").innerHTML = [["Backend", L.backend || "–"], ["Errors", L.errors], ["Raised severity", L.upgraded], ["Lowered severity", L.downgraded],
+    ["Input tokens", compact(L.tokens)], ["Awaiting triage", s.pending]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join("");
+  bars($("bCats"), Object.entries(s.categories), "--s-orange", v => nf.format(v));
+  bars($("bProto"), Object.entries(s.proto), "--s-blue", compact);
+  $("tRemote").innerHTML = s.remote.length ? s.remote.map(r => `<tr><td class="strong">${esc(r.ip)}</td><td>${esc(r.name || "–")}${r.service ? ` <span class="svc">${esc(r.service)}</span>` : ""}</td><td class="num">${bytes(r.bytes)}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">No internet traffic yet.</td></tr>';
+  $("tDomains").innerHTML = s.domains.length ? s.domains.map(r => `<tr><td class="strong">${esc(r.domain)}</td><td>${r.service ? esc(r.service) : '<span class="svc">unknown</span>'}</td><td class="num">${nf.format(r.queries)}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">No DNS lookups yet.</td></tr>';
+  $("foot").textContent = `Laya Packet Analyser · ${L.url ? "Laya at " + L.url : "no Laya server"} · up ${Math.round(s.uptime)} s · served on loopback only`;
+  const und = Object.values(tot.undecoded || {}).reduce((a, b) => a + b, 0);
+  $("health").innerHTML = [["Frames read", nf.format(tot.packets)], ["Decoded (unique)", nf.format(tot.decoded)],
+    ["Duplicate copies dropped", nf.format(tot.duplicates || 0)], ["Undecoded frames", nf.format(und)],
+    ["Processing errors", nf.format(tot.errors || 0)], ["Own traffic excluded", nf.format(tot.self_excluded || 0)], ["Status", s.status]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join("");
+  $("log").innerHTML = (s.log || []).slice(-8).reverse().map(l => `<div><span class="svc">${clock(l.t)}</span> ${esc(l.msg)}</div>`).join("");
+  render(); renderFeed(); renderReview();
+}
+
+// ---------------------------------------------------------------- Laya call inspector
+const PURPOSE_COLOR = { "conversation review": "--s-violet", "conversation category": "--s-aqua", "alert triage": "--s-orange",
+  "domain check": "--s-blue", "device review": "--s-magenta" };
+let calls = [], lastCallId = 0, callFilter = "", callSearch = "", callPaused = false, openCalls = new Set();
+document.querySelectorAll("#callFilter button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#callFilter button").forEach(x => x.setAttribute("aria-pressed", x === b)); callFilter = b.dataset.v; renderCalls();
+});
+$("callSearch").addEventListener("input", e => { callSearch = e.target.value.toLowerCase(); renderCalls(); });
+$("callPause").onclick = () => {
+  callPaused = !callPaused; $("callPause").setAttribute("aria-pressed", callPaused);
+  $("callPause").textContent = callPaused ? "▶ Resume" : "❚❚ Pause"; if (!callPaused) renderCalls();
+};
+$("calls").addEventListener("click", e => {
+  const row = e.target.closest(".call-row"); if (!row) return;
+  const el = row.parentElement, id = +el.dataset.id;
+  openCalls.has(id) ? openCalls.delete(id) : openCalls.add(id); el.classList.toggle("open");
+});
+function answerCards(req, resp) {
+  const qs = (req && req.questions) || {}, ans = (resp && resp.answers) || {};
+  return Object.entries(ans).map(([qid, a]) => {
+    const q = qs[qid] || {};
+    let head = "", bars = "";
+    if (a.type === "noul") {
+      head = `${a.noul >= .5 ? "Yes" : "No"} · p(yes) ${a.noul.toFixed(3)}`;
+      bars = [["yes", a.noul], ["no", 1 - a.noul]].map(([k, v]) => pbar(k, v)).join("");
+    } else if (a.type === "choice") {
+      head = `${a.choice} · ${(a.answer_confidence ?? 0).toFixed(3)}`;
+      bars = Object.entries(a.probabilities || {}).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => pbar(k.replace(/_/g, " "), v)).join("");
+    } else if (a.type === "score") {
+      head = `score ${a.score?.toFixed(2)}`;
+      bars = Object.entries(a.probabilities || {}).map(([k, v]) => pbar((a.legend || {})[k] || k, v)).join("");
+    }
+    return `<div class="acard"><div class="q"><b>${esc(qid)}</b> — ${esc(q.instructions || "")}</div><div class="a">${esc(head)}</div>${bars}</div>`;
+  }).join("");
+}
+const pbar = (k, v) => `<div class="pbar"><span>${esc(k)}</span><span class="tr"><span style="width:${Math.round(v * 100)}%"></span></span><span class="v">${(v * 100).toFixed(0)}%</span></div>`;
+function renderCalls() {
+  if (callPaused) return;
+  const list = calls.filter(c => (!callFilter || (c.purpose || "").startsWith(callFilter)) &&
+    (!callSearch || JSON.stringify([c.subject, c.summary, c.request && c.request.state]).toLowerCase().includes(callSearch)))
+    .slice(-150).reverse();
+  const n = calls.length, errs = calls.filter(c => c.error).length, withMs = calls.filter(c => c.ms != null);
+  const avg = withMs.length ? withMs.reduce((a, c) => a + c.ms, 0) / withMs.length : null;
+  $("callStats").innerHTML = [["Calls shown (latest " + n + ")", nf.format(list.length)], ["Average latency", ms(avg)],
+    ["Errors", nf.format(errs)], ["Backend", (calls[n - 1] || {}).backend || "–"]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join("");
+  if (!list.length) { $("calls").innerHTML = `<div class="empty">${n ? "No calls match this filter." : "No Laya calls yet."}</div>`; return; }
+  $("calls").innerHTML = list.map(c => {
+    const col = PURPOSE_COLOR[c.purpose] || "--muted";
+    const meta = c.error ? `<pre>${esc(c.error)}</pre>` :
+      `<div class="svc" style="margin-bottom:8px">${esc(c.backend || "")} · round trip ${ms(c.ms)} · server ${ms(c.server_ms)} · ${nf.format(c.tokens || 0)} input tokens · ${esc(c.url || "")}</div>`;
+    return `<div class="call${openCalls.has(c.id) ? " open" : ""}" data-id="${c.id}">
+      <div class="call-row"><span class="t">${clock(c.wall)}</span>
+        <span class="purpose"><i style="background:var(${col})"></i>${esc(c.purpose || "call")}</span>
+        <span class="subj" title="${esc(c.subject)}">${esc(c.subject || "")}</span>
+        <span class="ans" title="${esc(c.summary)}">${c.error ? "error" : esc(c.summary)}</span>
+        <span class="ms">${c.ms == null ? "–" : Math.round(c.ms) + " ms"}</span><span class="chev">›</span></div>
+      <div class="call-body">
+        <div><h3>Request</h3><pre>${esc(JSON.stringify(c.request, null, 2))}</pre></div>
+        <div><h3>Response</h3>${meta}${c.response ? `<div class="answer-cards">${answerCards(c.request, c.response)}</div><pre>${esc(JSON.stringify(c.response, null, 2))}</pre>` : ""}</div>
+      </div></div>`;
+  }).join("");
+}
+async function pollCalls() {
+  try {
+    const r = await (await fetch("/api/calls?after=" + lastCallId, { cache: "no-store" })).json();
+    if (!r.enabled) $("callsCard").style.display = "none";
+    if (r.calls.length) {
+      calls = calls.concat(r.calls).slice(-500); lastCallId = r.calls[r.calls.length - 1].id; renderCalls();
+    } else if (!calls.length) renderCalls();
+  } catch (e) {}
+  setTimeout(pollCalls, 1000);
+}
+pollCalls();
+
+async function poll() {
+  try {
+    const r = await fetch("/api/state?since=" + lastT, { cache: "no-store" });
+    update(await r.json());
+  } catch (e) {
+    $("statusDot").className = "dot down"; $("statusText").textContent = "analyser stopped";
+  }
+  setTimeout(poll, 1000);
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+poll();
+</script>
+</body>
+</html>

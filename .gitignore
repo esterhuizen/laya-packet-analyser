@@ -1,0 +1,11 @@
+# local edit backups, caches, captures and run outputs (captures can contain private traffic)
+backups/
+__pycache__/
+*.pyc
+*.pcap
+*.pcapng
+*.etl
+*.jsonl
+live.json
+eval/
+samples/
