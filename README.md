@@ -168,3 +168,8 @@ Panels:
   upload noise.
 - Tested on Windows 11 ARM64 (Snapdragon X Elite, Wi-Fi) with Python 3.12 and 3.14, and on Linux Python 3.12
   (file analysis and the unit tests).
+
+## Licence
+
+MIT: free to use, copy, modify and redistribute for any purpose, commercial or not. See [LICENSE](LICENSE).
+Laya itself is a separate project under Apache-2.0; this repository does not include its model or code.
