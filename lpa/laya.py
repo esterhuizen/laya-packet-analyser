@@ -38,6 +38,11 @@ class LayaStats:
         self.backend = None; self.url = None; self.up = False; self.last_error = None
         self.queued = 0; self.dropped = 0; self.upgraded = 0; self.downgraded = 0
 
+    def clear(self):
+        with self.lock:                          # keep url / backend / up: the connection itself is unchanged
+            self.calls = self.errors = self.questions = self.tokens = 0; self.lat.clear(); self.last_error = None
+            self.dropped = self.upgraded = self.downgraded = 0
+
     def snapshot(self):
         with self.lock:
             lat = [c for _, c, _ in self.lat]
@@ -59,6 +64,10 @@ class CallLog:
         with self.lock:
             rec["id"] = self.next_id; self.next_id += 1
             self.calls.append(rec)
+
+    def clear(self):
+        with self.lock:                          # ids keep counting up so dashboards never see an old id again
+            self.calls.clear()
 
     def since(self, after_id=0, limit=200):
         with self.lock:
@@ -237,6 +246,13 @@ class Pipeline:
         t0 = time.time()
         while self.q.unfinished_tasks and (timeout is None or time.time() - t0 < timeout):
             time.sleep(0.05)
+
+    def clear_history(self):
+        with self.lock:
+            self.alerts = []
+        self.stats.clear()
+        if self.client:
+            self.client.log.clear()
 
     def severity_counts(self):
         with self.lock:

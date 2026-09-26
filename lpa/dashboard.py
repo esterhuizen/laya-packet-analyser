@@ -61,6 +61,16 @@ class Sampler:
     def stop(self):
         self._stop.set()
 
+    def clear_history(self):
+        """Start fresh: charts, alerts, Laya call log and counters. Capture and detection keep running."""
+        e, p = self.e, self.p
+        e.clear_history(); p.clear_history()
+        if getattr(e, "reviewer", None):
+            e.reviewer.clear_history()
+        with self.lock:
+            self.series.clear(); self.prev = None; self.t0 = time.time()
+        e.m.note("history cleared from the dashboard")
+
     # ------------------------------------------------------------------ state for the UI
     def state(self, since=0.0):
         e, p = self.e, self.p
@@ -110,6 +120,24 @@ class Dashboard:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype); self.send_header("Cache-Control", "no-store")
                 self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            def _same_origin(self):
+                """State-changing requests must come from this dashboard: a matching Host (defeats DNS rebinding),
+                a matching Origin when the browser sends one (defeats cross-site forms), and a custom header that a
+                cross-site page cannot add without a CORS preflight, which this server never grants."""
+                port = self.server.server_address[1]
+                ok_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
+                origin = self.headers.get("Origin")
+                return (self.headers.get("Host") in ok_hosts and self.headers.get("X-LPA-Request") == "1"
+                        and (origin is None or origin.split("://", 1)[-1] in ok_hosts))
+
+            def do_POST(self):
+                if self.path == "/api/reset":
+                    if not self._same_origin():
+                        return self._send(403, b"forbidden", "text/plain")
+                    smp.clear_history()
+                    return self._send(200, b'{"ok": true}', "application/json")
+                self._send(404, b"not found", "text/plain")
 
             def do_GET(self):
                 if self.path in ("/", "/index.html"):

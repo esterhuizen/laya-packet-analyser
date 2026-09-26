@@ -415,6 +415,10 @@ class Reviewer:
         eng.emit(item["ts"], "laya-review", cat if cat in CATEGORIES else "benign", sev, title, text, item["local"],
                  item["remote"], key=("laya-review", item["key"]), evidence={"state": item["state"]}, laya=laya)
 
+    def clear_history(self):
+        with self.lock:                          # verdict cache and queue stay: they are work, not history
+            self.results = []; self.reviewed = self.cached = self.flagged = self.skipped = 0
+
     def snapshot(self, n=40):
         with self.lock:
             rs = list(self.results)

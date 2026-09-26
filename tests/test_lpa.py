@@ -191,5 +191,43 @@ class TestLayaReview(unittest.TestCase):
         self.assertNotIn("hunter2", preview(b"login=bob&password=hunter2"))
 
 
+class TestDashboardReset(unittest.TestCase):
+    def setUp(self):
+        from lpa.dashboard import Dashboard, Sampler
+        self.sink = Pipeline(None, []); self.eng = Engine(self.sink)
+        f = S.eth(S.LAPTOP_MAC, S.GW_MAC, 0x0800, S.ipv4(S.LAPTOP, "198.51.100.21", 6, S.tcp(5000, 21, 0x18, b"PASS x\r\n")))
+        self.eng.feed(1.0, 1, f, len(f))
+        self.smp = Sampler(self.eng, self.sink); self.d = Dashboard(self.smp, port=0)
+        self.port = self.d.httpd.server_address[1]
+
+    def tearDown(self):
+        self.d.close(); self.smp.stop()
+
+    def post(self, headers):
+        import urllib.error, urllib.request
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/reset", data=b"", headers=headers, method="POST")
+        try:
+            return urllib.request.urlopen(req, timeout=5).status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_reset_requires_same_origin(self):
+        self.assertEqual(self.post({}), 403)                                        # plain cross-site form post
+        self.assertEqual(self.post({"X-LPA-Request": "1", "Origin": "https://evil.example"}), 403)
+        self.assertEqual(self.post({"X-LPA-Request": "1", "Host": "evil.example"}), 403)   # DNS rebinding
+        self.assertEqual(len(self.sink.alerts), 1)
+        self.assertEqual(self.post({"X-LPA-Request": "1", "Origin": f"http://127.0.0.1:{self.port}"}), 200)
+        self.assertEqual((len(self.sink.alerts), self.eng.m.packets, len(self.eng.alerts)), (0, 0, 0))
+
+    def test_certificate_checks_are_not_cleartext_browsing(self):
+        sink = Collect(); eng = Engine(sink)
+        for host, path in (("ocsps.ssl.com", "/MEkwRzBF"), ("crl.example-ca.net", "/root.crl"), ("neverssl.com", "/")):
+            f = S.eth(S.LAPTOP_MAC, S.GW_MAC, 0x0800, S.ipv4(S.LAPTOP, "198.51.100.30", 6, S.tcp(5001, 80, 0x18,
+                      f"GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())))
+            eng.feed(2.0, 1, f, len(f))
+        self.assertEqual([a.dst for a in sink.alerts if a.title == "Unencrypted web traffic"], ["198.51.100.30"])
+        self.assertEqual(len([a for a in sink.alerts if a.title == "Unencrypted web traffic"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

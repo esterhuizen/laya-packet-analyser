@@ -115,6 +115,15 @@ class Engine:
         self.sink.submit(a)
         return a
 
+    def clear_history(self):
+        """Dashboard 'Clear history': forget counters, alerts and the alert-folding memory. Detection keeps its state
+        (open flows, IP->name map, learned traffic baselines) so it carries on without a warm-up gap."""
+        with self._emit_lock:
+            self.alerts = {}
+        self.m = Metrics()
+        with self.m.lock:
+            self.m.flows_active = len(self.flows)
+
     # ------------------------------------------------------------------ main entry
     def feed(self, ts, linktype, data, wirelen):
         m = self.m

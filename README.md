@@ -158,7 +158,16 @@ Panels:
   click a row for the full request JSON, the answers as probability bars, and the raw response. Filter by purpose,
   search, or pause.
 - **Laya live review**: every conversation and device, ranked by threat score
-- the alert feed, with evidence you can expand
+- the alert feed. Each alert shows two separate things:
+  - **severity** (Info → Critical): how urgently to act, set by the detector from hard evidence
+  - **Laya's opinion** ("looks malicious / suspicious / harmless", % likely a threat)
+
+  Laya can move severity one level at most and never lowers High or Critical, so an alert can be Low yet "look
+  malicious". Each alert says where its severity came from, and opening it explains why.
+- **Clear history** (header button, click twice): forgets charts, alerts, Laya calls and counters and starts fresh.
+  Capture, open connections, learned baselines and name lookups carry on. The reset endpoint only accepts requests
+  from the dashboard itself (Host, Origin and a custom header are checked), so another website open in your browser
+  cannot wipe your history.
 - **Capture health**: frames read and decoded, pktmon duplicates, excluded own traffic, errors, and pktmon messages
 
 ## Limits

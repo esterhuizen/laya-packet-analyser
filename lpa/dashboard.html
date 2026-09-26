@@ -112,10 +112,19 @@ td .strong { color: var(--ink); }
 .alert pre { margin: 10px 0 0; padding: 10px; background: var(--surface-2); border-radius: 8px; font-size: 11.5px; color: var(--ink-2); white-space: pre-wrap; word-break: break-all; display: none; }
 .alert.open pre { display: block; }
 .laya { font-size: 12px; color: var(--ink-2); }
-.laya .v { font-weight: 650; color: var(--ink); text-transform: capitalize; }
+.laya .v { font-weight: 650; color: var(--ink); }
 .laya .meter { height: 6px; background: var(--surface-2); border-radius: 3px; margin: 6px 0 4px; overflow: hidden; }
 .laya .meter span { display: block; height: 100%; border-radius: 3px; }
 .laya .adj { color: var(--muted); }
+.laya .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; display: block; margin-bottom: 2px; }
+.alert .origin { color: var(--muted); font-size: 11.5px; margin-top: 4px; line-height: 1.35; }
+.alert .why { display: none; margin: 10px 0 0; padding: 10px 12px; border-left: 3px solid var(--axis); background: var(--surface-2);
+  border-radius: 0 8px 8px 0; font-size: 12.5px; color: var(--ink-2); }
+.alert.open .why { display: block; }
+.explainer { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px 20px; font-size: 12.5px; color: var(--ink-2);
+  background: var(--surface-2); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; }
+.explainer b { color: var(--ink); }
+button.chip.danger[data-armed="1"] { color: #fff; background: var(--sev-critical); border-color: var(--sev-critical); }
 .empty { color: var(--muted); padding: 28px 0; text-align: center; }
 .verdict { display: flex; height: 26px; border-radius: 6px; overflow: hidden; gap: 2px; margin: 8px 0 12px; background: var(--surface-2); }
 .verdict span { display: block; height: 100%; transition: flex-grow .4s ease; }
@@ -177,6 +186,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 18px; text-align: cen
     <div class="seg" role="group" aria-label="Time range" id="range">
       <button data-s="60">1m</button><button data-s="300" aria-pressed="true">5m</button><button data-s="900">15m</button><button data-s="0">All</button>
     </div>
+    <button class="chip danger" id="clearBtn" title="Clear charts, alerts, Laya calls and counters. Capture and detection keep running.">⟲ Clear history</button>
     <button class="chip" id="theme" title="Toggle light / dark">◐ Theme</button>
   </header>
 
@@ -284,12 +294,19 @@ footer { color: var(--muted); font-size: 12px; margin-top: 18px; text-align: cen
 
   <section class="card">
     <div class="card-head">
-      <div><h2>Security alerts</h2><div class="hint">Detector evidence with Laya's verdict. Click an alert for its evidence.</div></div>
+      <div><h2>Security alerts</h2><div class="hint">Click an alert to see why it has its severity, and its evidence.</div></div>
       <div class="feed-tools">
         <div class="seg" role="group" aria-label="Minimum severity" id="minsev">
           <button data-v="0">All</button><button data-v="1" aria-pressed="true">Low+</button><button data-v="2">Medium+</button><button data-v="3">High+</button>
         </div>
       </div>
+    </div>
+    <div class="explainer">
+      <div><b>Severity</b> (Info → Critical) is how urgently you should act. The detector sets it from hard evidence,
+        e.g. a password sent in the clear is High, plain-HTTP browsing is Info.</div>
+      <div><b>Laya's opinion</b> is how likely the model thinks it is an attack. It can move severity <b>one level</b> up or
+        down, never more, and never lowers High or Critical. So a minor finding can be <b>Low</b> even when Laya thinks it
+        <b>looks malicious</b>: the evidence is weak, the model is worried.</div>
     </div>
     <div id="feed"><div class="empty">No alerts yet.</div></div>
   </section>
@@ -534,6 +551,53 @@ function bars(el, entries, color, fmt) {
     <span class="val">${fmt(v)}</span></div>`).join(""));
 }
 let feedSig = null, alertById = new Map();
+const cap = x => x ? x[0].toUpperCase() + x.slice(1) : x;
+function severityOrigin(a) {                                     // one line under the badge: where the level came from
+  const l = a.laya || {}, d = SEVS.indexOf(a.final_severity) - SEVS.indexOf(a.severity);
+  if (l.mode === "review") return "raised by Laya's review";
+  if (d > 0) return `detector: ${cap(a.severity)} · Laya raised it`;
+  if (d < 0) return `detector: ${cap(a.severity)} · Laya lowered it`;
+  return "set by the detector";
+}
+function severityWhy(a) {                                        // shown when the alert is opened
+  const l = a.laya || {}, p = Math.round((l.p_malicious ?? 0) * 100), fin = cap(a.final_severity), det = cap(a.severity);
+  const view = { malicious: "looks malicious", suspicious: "looks suspicious", benign: "looks harmless" }[l.verdict] || "";
+  if (l.mode === "review")
+    return `Why ${fin}? No detector rule fired here: Laya flagged this conversation itself (${p}% likely a threat, `
+      + `backed by ${(l.corroborated_by || []).join(", ") || "its own reading"}). Findings from Laya alone are kept at Low `
+      + `or Medium, because on its own the model often misjudges ordinary traffic. Treat it as a lead to check, not proof.`;
+  if (!l.mode || l.mode === "unavailable" || l.mode === "skipped")
+    return `Why ${fin}? The detector rated this ${det} from its evidence. Laya was not consulted, so the rating is unchanged.`;
+  const d = SEVS.indexOf(a.final_severity) - SEVS.indexOf(a.severity);
+  const base = `The detector rated this ${det} from its evidence. Laya's opinion: it ${view} (${p}% likely a threat)`;
+  if (d > 0) return `Why ${fin}? ${base}, so the severity was raised one level to ${fin}. Laya can only move severity by one `
+    + `level, so weak evidence stays ${fin} even when the model is worried. If this looks like normal activity to you, it probably is.`;
+  if (d < 0) return `Why ${fin}? ${base}, so the severity was lowered one level to ${fin}.`;
+  if (SEVS.indexOf(a.severity) >= 3 && l.verdict === "benign")
+    return `Why ${fin}? ${base}, but High and Critical findings are never lowered: the evidence itself (for example a password sent in the clear) is what matters.`;
+  return `Why ${fin}? ${base}; that was not strong enough either way to change the detector's rating.`;
+}
+
+// ---------------------------------------------------------------- clear history (two clicks: arm, then confirm)
+let clearTimer = null;
+$("clearBtn").onclick = async () => {
+  const b = $("clearBtn");
+  if (b.dataset.armed !== "1") {
+    b.dataset.armed = "1"; b.textContent = "Click again to clear everything";
+    clearTimer = setTimeout(() => { b.dataset.armed = ""; b.textContent = "⟲ Clear history"; }, 4000);
+    return;
+  }
+  clearTimeout(clearTimer); b.dataset.armed = ""; b.textContent = "Clearing…";
+  try {
+    const r = await fetch("/api/reset", { method: "POST", headers: { "X-LPA-Request": "1" } });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    series = []; lastT = 0; peak = 0; openIds.clear(); openCalls.clear(); feedSig = rvSig = null;
+    calls = []; callById.clear(); callStat = { n: 0, errs: 0, msSum: 0, msN: 0, backend: callStat.backend };
+    rebuildCalls(); render(true);
+    b.textContent = "✓ Cleared";
+  } catch (e) { b.textContent = "Clear failed"; }
+  setTimeout(() => { b.textContent = "⟲ Clear history"; }, 2000);
+};
 function evidenceJSON(a) {
   return JSON.stringify({ detector: a.detector, category: a.category, src: a.src, dst: a.dst, evidence: a.evidence, laya: a.laya }, null, 2);
 }
@@ -546,19 +610,20 @@ function renderFeed() {
   if (!list.length) { setHTML($("feed"), `<div class="empty">${s.alerts.length ? "No alerts at this severity." : "No alerts yet. The detectors are watching."}</div>`); return; }
   setHTML($("feed"), list.map(a => {
     const l = a.laya || {};
-    let lay = '<div class="laya"><span class="adj">Laya not consulted</span></div>';
+    let lay = '<div class="laya"><span class="lbl">Laya\'s opinion</span><span class="adj">not consulted</span></div>';
     if (l.mode === "triage" || l.mode === "domain" || l.mode === "review") {
-      const p = l.p_malicious ?? 0, col = p >= .6 ? "--sev-critical" : p >= .35 ? "--sev-medium" : "--good";
-      const adj = a.final_severity !== a.severity ? `${a.severity} → ${a.final_severity}` : "severity kept";
-      lay = `<div class="laya">Laya: <span class="v">${esc(l.verdict)}</span> · ${Math.round(p * 100)}% threat
+      const p = l.p_malicious ?? 0;                                // the bar colour follows the verdict, not the raw %
+      const col = { malicious: "--sev-critical", suspicious: "--sev-medium", benign: "--good" }[l.verdict] || "--muted";
+      const phrase = { malicious: "looks malicious", suspicious: "looks suspicious", benign: "looks harmless" }[l.verdict] || l.verdict;
+      lay = `<div class="laya"><span class="lbl">Laya's opinion</span><span class="v">${esc(phrase)}</span> · ${Math.round(p * 100)}% likely a threat
         <div class="meter"><span style="width:${Math.round(p * 100)}%;background:var(${col})"></span></div>
-        <span class="adj">${esc((l.category || l.kind || "").replace(/_/g, " "))} · ${adj} · ${Math.round(l.ms)} ms</span></div>`;
-    } else if (l.mode) lay = `<div class="laya"><span class="adj">Laya unavailable: ${esc(l.reason || "")}</span></div>`;
+        <span class="adj">${esc((l.category || l.kind || "").replace(/_/g, " "))} · ${Math.round(l.ms)} ms</span></div>`;
+    } else if (l.mode) lay = `<div class="laya"><span class="lbl">Laya's opinion</span><span class="adj">unavailable: ${esc(l.reason || "")}</span></div>`;
     const open = openIds.has(a.id);
     return `<div class="alert${open ? " open" : ""}" data-id="${a.id}">
-      <div>${sevBadge(a.final_severity)}<div class="when">${clock(a.ts)}</div></div>
+      <div>${sevBadge(a.final_severity)}<div class="when">${clock(a.ts)}</div><div class="origin">${esc(severityOrigin(a))}</div></div>
       <div><div class="title">${esc(a.title)}${a.count > 1 ? `<span class="count">×${a.count}</span>` : ""}</div>
-        <div class="story">${esc(a.story)}</div><pre>${open ? esc(evidenceJSON(a)) : ""}</pre></div>
+        <div class="story">${esc(a.story)}</div><div class="why">${esc(severityWhy(a))}</div><pre>${open ? esc(evidenceJSON(a)) : ""}</pre></div>
       ${lay}</div>`;
   }).join(""));
 }
