@@ -48,9 +48,14 @@ header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-
 .chip { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border-radius: 999px;
         background: var(--surface); border: 1px solid var(--border); color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-.dot.live { background: var(--good); box-shadow: 0 0 0 0 rgba(12,163,12,.6); animation: pulse 2s infinite; }
+.dot.live { background: var(--good); position: relative; }
+/* The pulse ring only animates transform + opacity, which the compositor handles without repainting the page.
+   (Animating box-shadow repainted every frame and cost ~13% of the main thread on its own.) */
+.dot.live::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--good);
+  animation: ring 2s ease-out infinite; will-change: transform, opacity; }
 .dot.down { background: var(--sev-critical); }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(12,163,12,.55); } 70% { box-shadow: 0 0 0 8px rgba(12,163,12,0); } 100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); } }
+@keyframes ring { from { transform: scale(1); opacity: .5; } to { transform: scale(2.8); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .dot.live::after { animation: none; } }
 button.chip { cursor: pointer; font: inherit; font-size: 12.5px; }
 button.chip:hover { color: var(--ink); }
 .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
@@ -299,8 +304,14 @@ footer { color: var(--muted); font-size: 12px; margin-top: 18px; text-align: cen
 <script>
 "use strict";
 const SEVS = ["info", "low", "medium", "high", "critical"];
-const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+// Colour tokens are read once per theme (getComputedStyle is slow and the charts ask for colours hundreds of times).
+let _css = {};
+const css = n => _css[n] ?? (_css[n] = getComputedStyle(document.documentElement).getPropertyValue(n).trim());
 const $ = id => document.getElementById(id);
+// Only touch the DOM when the markup actually changed: most panels are identical from one second to the next.
+const _html = new WeakMap();
+function setHTML(el, html) { if (_html.get(el) !== html) { _html.set(el, html); el.innerHTML = html; } }
+function setText(el, t) { if (el.textContent !== t) el.textContent = t; }
 let range = 300, minSev = 1, series = [], lastT = 0, peak = 0, openIds = new Set(), latest = null;
 
 // ---------------------------------------------------------------- formatting
@@ -335,12 +346,23 @@ class Chart {
     this.host = host; this.o = opts;
     this.cv = document.createElement("canvas"); host.appendChild(this.cv);
     this.tip = document.createElement("div"); this.tip.className = "tip"; host.appendChild(this.tip);
-    this.hover = null; this.data = null;
-    this.cv.addEventListener("mousemove", e => { const r = this.cv.getBoundingClientRect(); this.hover = e.clientX - r.left; this.draw(); });
-    this.cv.addEventListener("mouseleave", () => { this.hover = null; this.draw(); });
-    new ResizeObserver(() => this.draw()).observe(host);
+    this.hover = null; this.data = null; this.sig = null; this.pending = false; this.visible = true; this.dirty = false;
+    this.cv.addEventListener("mousemove", e => { const r = this.cv.getBoundingClientRect(); this.hover = e.clientX - r.left; this.schedule(); });
+    this.cv.addEventListener("mouseleave", () => { this.hover = null; this.schedule(); });
+    new ResizeObserver(() => this.schedule()).observe(host);
+    new IntersectionObserver(es => { this.visible = es[0].isIntersecting; if (this.visible && this.dirty) this.schedule(); }).observe(host);
   }
-  set(data) { this.data = data; this.draw(); }
+  set(data, force) {
+    const t = data.t, sig = t.length + ":" + t[0] + ":" + t[t.length - 1] + ":" + data.series.map(x => x.v[x.v.length - 1]).join(",");
+    if (!force && sig === this.sig) return;                       // nothing new to show
+    this.sig = sig; this.data = data; this.schedule();
+  }
+  schedule() {
+    if (!this.visible || document.hidden) { this.dirty = true; return; }
+    if (this.pending) return;
+    this.pending = true;
+    requestAnimationFrame(() => { this.pending = false; this.dirty = false; this.draw(); });
+  }
   draw() {
     const d = this.data, cv = this.cv, o = this.o;
     const W = this.host.clientWidth, H = this.host.clientHeight, dpr = window.devicePixelRatio || 1;
@@ -473,7 +495,7 @@ $("theme").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
   try { localStorage.setItem("lpa-theme", document.documentElement.dataset.theme); } catch (e) {}
-  render();
+  _css = {}; render(true);
 };
 
 // ---------------------------------------------------------------- rendering
@@ -490,32 +512,39 @@ function bucketed(rows, size) {       // alert counts per bucket for the stacked
   });
   return out;
 }
-function render() {
+function render(force) {
   const rows = windowed(), t = rows.map(r => r.t);
-  charts.total.set({ t, series: [{ name: "packets", color: "--s-blue", v: rows.map(r => r.packets), area: true }] });
-  charts.pps.set({ t, series: [{ name: "packets/s", color: "--s-blue", v: rows.map(r => r.pps), area: true }] });
-  charts.calls.set({ t, series: [{ name: "Laya calls", color: "--s-violet", v: rows.map(r => r.laya_calls), area: true }] });
+  charts.total.set({ t, series: [{ name: "packets", color: "--s-blue", v: rows.map(r => r.packets), area: true }] }, force);
+  charts.pps.set({ t, series: [{ name: "packets/s", color: "--s-blue", v: rows.map(r => r.pps), area: true }] }, force);
+  charts.calls.set({ t, series: [{ name: "Laya calls", color: "--s-violet", v: rows.map(r => r.laya_calls), area: true }] }, force);
   let sum = 0, n = 0;
   const run = rows.map(r => { if (r.laya_ms != null) { sum += r.laya_ms * r.laya_calls_dt; n += r.laya_calls_dt; } return n ? sum / n : null; });
-  charts.lat.set({ t, series: [{ name: "per second", color: "--s-violet", v: rows.map(r => r.laya_ms) }, { name: "running average", color: "--s-aqua", v: run }] });
-  charts.bps.set({ t, series: [{ name: "download", color: "--s-blue", v: rows.map(r => r.bps_in), area: true }, { name: "upload", color: "--s-orange", v: rows.map(r => r.bps_out), area: true }] });
+  charts.lat.set({ t, series: [{ name: "per second", color: "--s-violet", v: rows.map(r => r.laya_ms) }, { name: "running average", color: "--s-aqua", v: run }] }, force);
+  charts.bps.set({ t, series: [{ name: "download", color: "--s-blue", v: rows.map(r => r.bps_in), area: true }, { name: "upload", color: "--s-orange", v: rows.map(r => r.bps_out), area: true }] }, force);
   const span = rows.length ? rows[rows.length - 1].t - rows[0].t : 0, size = span > 600 ? 30 : span > 120 ? 10 : 5;
   const bk = bucketed(rows, size);
-  charts.alerts.set({ t: bk.map(b => b.t + size / 2), series: SEVS.slice(1).map(s => ({ name: s, color: "--sev-" + s, v: bk.map(b => b.sev[s]) })) });
-  spark($("sparkPps"), rows.slice(-60).map(r => r.pps), "--s-blue");
+  charts.alerts.set({ t: bk.map(b => b.t + size / 2), series: SEVS.slice(1).map(s => ({ name: s, color: "--sev-" + s, v: bk.map(b => b.sev[s]) })) }, force);
+  if (!document.hidden) spark($("sparkPps"), rows.slice(-60).map(r => r.pps), "--s-blue");
 }
 function bars(el, entries, color, fmt) {
-  if (!entries.length) { el.innerHTML = '<div class="empty">Nothing yet.</div>'; return; }
+  if (!entries.length) { setHTML(el, '<div class="empty">Nothing yet.</div>'); return; }
   const mx = Math.max(...entries.map(e => e[1]), 1);
-  el.innerHTML = entries.map(([k, v]) => `<div class="row"><span class="name" title="${esc(k)}">${esc(k.replace(/_/g, " "))}</span>
+  setHTML(el, entries.map(([k, v]) => `<div class="row"><span class="name" title="${esc(k)}">${esc(k.replace(/_/g, " "))}</span>
     <span class="track"><span class="fill" style="width:${Math.max(1, v / mx * 100)}%;background:var(${color})"></span></span>
-    <span class="val">${fmt(v)}</span></div>`).join("");
+    <span class="val">${fmt(v)}</span></div>`).join(""));
+}
+let feedSig = null, alertById = new Map();
+function evidenceJSON(a) {
+  return JSON.stringify({ detector: a.detector, category: a.category, src: a.src, dst: a.dst, evidence: a.evidence, laya: a.laya }, null, 2);
 }
 function renderFeed() {
   const s = latest; if (!s) return;
-  const list = s.alerts.filter(a => SEVS.indexOf(a.final_severity) >= minSev);
-  if (!list.length) { $("feed").innerHTML = `<div class="empty">${s.alerts.length ? "No alerts at this severity." : "No alerts yet. The detectors are watching."}</div>`; return; }
-  $("feed").innerHTML = list.slice(0, 80).map(a => {
+  const list = s.alerts.filter(a => SEVS.indexOf(a.final_severity) >= minSev).slice(0, 80);
+  const sig = minSev + "|" + s.alerts.length + "|" + list.map(a => `${a.id}.${a.count}.${a.final_severity}.${(a.laya || {}).verdict || ""}`).join(",");
+  if (sig === feedSig) return;                                   // same alerts as last second: leave the DOM alone
+  feedSig = sig; alertById = new Map(list.map(a => [a.id, a]));
+  if (!list.length) { setHTML($("feed"), `<div class="empty">${s.alerts.length ? "No alerts at this severity." : "No alerts yet. The detectors are watching."}</div>`); return; }
+  setHTML($("feed"), list.map(a => {
     const l = a.laya || {};
     let lay = '<div class="laya"><span class="adj">Laya not consulted</span></div>';
     if (l.mode === "triage" || l.mode === "domain" || l.mode === "review") {
@@ -525,15 +554,15 @@ function renderFeed() {
         <div class="meter"><span style="width:${Math.round(p * 100)}%;background:var(${col})"></span></div>
         <span class="adj">${esc((l.category || l.kind || "").replace(/_/g, " "))} · ${adj} · ${Math.round(l.ms)} ms</span></div>`;
     } else if (l.mode) lay = `<div class="laya"><span class="adj">Laya unavailable: ${esc(l.reason || "")}</span></div>`;
-    const ev = JSON.stringify({ detector: a.detector, category: a.category, src: a.src, dst: a.dst, evidence: a.evidence, laya: a.laya }, null, 2);
-    return `<div class="alert${openIds.has(a.id) ? " open" : ""}" data-id="${a.id}">
+    const open = openIds.has(a.id);
+    return `<div class="alert${open ? " open" : ""}" data-id="${a.id}">
       <div>${sevBadge(a.final_severity)}<div class="when">${clock(a.ts)}</div></div>
       <div><div class="title">${esc(a.title)}${a.count > 1 ? `<span class="count">×${a.count}</span>` : ""}</div>
-        <div class="story">${esc(a.story)}</div><pre>${esc(ev)}</pre></div>
+        <div class="story">${esc(a.story)}</div><pre>${open ? esc(evidenceJSON(a)) : ""}</pre></div>
       ${lay}</div>`;
-  }).join("");
+  }).join(""));
 }
-let rvView = "top";
+let rvView = "top", rvSig = null;
 document.querySelectorAll("#rvView button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#rvView button").forEach(x => x.setAttribute("aria-pressed", x === b)); rvView = b.dataset.v; renderReview();
 });
@@ -541,11 +570,14 @@ function renderReview() {
   const r = latest && latest.review;
   if (!r) { $("reviewCard").style.display = "none"; return; }
   $("reviewCard").style.display = "";
-  $("rvStats").innerHTML = [["Reviewed", nf.format(r.reviewed)], ["Reused (same service)", nf.format(r.cached)],
+  setHTML($("rvStats"), [["Reviewed", nf.format(r.reviewed)], ["Reused (same service)", nf.format(r.cached)],
     ["Raised as alerts", nf.format(r.flagged)], ["Waiting for Laya", nf.format(r.pending)]]
-    .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join("");
+    .map(([k, v]) => `<div><span>${k}</span><span>${v}</span></div>`).join(""));
   const rows = (rvView === "top" ? r.top : r.recent).slice(0, 25);
-  $("rvTable").innerHTML = rows.length ? rows.map(x => {
+  const sig = rvView + "|" + rows.map(x => x.wall + ":" + x.p).join(",");
+  if (sig === rvSig) return;
+  rvSig = sig;
+  setHTML($("rvTable"), rows.length ? rows.map(x => {
     const p = x.p ?? 0, col = x.flagged ? "--sev-critical" : p >= .7 ? "--sev-medium" : p >= .5 ? "--sev-low" : "--good";
     const text = x.state.traffic || x.state.device || "";
     const extra = x.state.payload ? `<div class="svc">${esc(x.state.payload.slice(0, 160))}</div>` : "";
@@ -555,11 +587,13 @@ function renderReview() {
       <td><div class="strong">${esc(text.slice(0, 220))}</div>${extra}</td>
       <td>${esc((x.category || "").replace(/_/g, " "))}<div class="svc">${x.cached ? "reused verdict" : ""}${why}</div></td>
       <td class="num">${x.error ? "err" : Math.round(x.ms)}</td></tr>`;
-  }).join("") : '<tr><td colspan="4" class="empty">Laya has not reviewed anything yet (conversations are reviewed after ~8 s).</td></tr>';
+  }).join("") : '<tr><td colspan="4" class="empty">Laya has not reviewed anything yet (conversations are reviewed after ~8 s).</td></tr>');
 }
 $("feed").addEventListener("click", e => {
   const el = e.target.closest(".alert"); if (!el) return;
   const id = +el.dataset.id; openIds.has(id) ? openIds.delete(id) : openIds.add(id); el.classList.toggle("open");
+  const pre = el.querySelector("pre"), a = alertById.get(id);
+  if (pre && a && !pre.textContent) pre.textContent = evidenceJSON(a);   // built on first open only
 });
 
 function update(s) {
@@ -583,7 +617,7 @@ function update(s) {
   $("kFlows").textContent = nf.format(tot.flows_active); $("kFlowsTotal").textContent = nf.format(tot.flows_total);
   const sev = s.severity, nAl = SEVS.reduce((a, k) => a + sev[k], 0);
   $("kAlerts").textContent = nf.format(nAl); $("kHigh").textContent = nf.format(sev.high + sev.critical);
-  $("kSevbar").innerHTML = nAl ? SEVS.map(k => sev[k] ? `<span title="${k}: ${sev[k]}" style="flex:${sev[k]};background:var(--sev-${k})"></span>` : "").join("") : "";
+  setHTML($("kSevbar"), nAl ? SEVS.map(k => sev[k] ? `<span title="${k}: ${sev[k]}" style="flex:${sev[k]};background:var(--sev-${k})"></span>` : "").join("") : "");
   $("kCalls").textContent = nf.format(L.calls); $("kQuestions").textContent = nf.format(L.questions); $("kQueue").textContent = L.queued;
   $("kLat").textContent = ms(L.avg_ms); $("kP95").textContent = ms(L.p95_ms); $("kLat60").textContent = ms(L.avg_ms_60s);
   $("nTotal").textContent = nf.format(tot.packets) + " packets";
@@ -592,23 +626,25 @@ function update(s) {
   // verdict split
   const V = [["benign", "--good"], ["suspicious", "--sev-medium"], ["malicious", "--sev-critical"]];
   const vt = V.reduce((a, [k]) => a + (s.verdicts[k] || 0), 0);
-  $("verdictBar").innerHTML = vt ? V.map(([k, c]) => s.verdicts[k] ? `<span title="${k}: ${s.verdicts[k]}" style="flex-grow:${s.verdicts[k]};background:var(${c})"></span>` : "").join("") : "";
-  $("verdictLegend").innerHTML = V.map(([k, c]) => `<span><i class="sq" style="background:var(${c})"></i>${k} <b style="color:var(--ink)">${s.verdicts[k] || 0}</b></span>`).join("");
-  $("layaStats").innerHTML = [["Backend", L.backend || "–"], ["Errors", L.errors], ["Raised severity", L.upgraded], ["Lowered severity", L.downgraded],
-    ["Input tokens", compact(L.tokens)], ["Awaiting triage", s.pending]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join("");
+  setHTML($("verdictBar"), vt ? V.map(([k, c]) => s.verdicts[k] ? `<span title="${k}: ${s.verdicts[k]}" style="flex-grow:${s.verdicts[k]};background:var(${c})"></span>` : "").join("") : "");
+  setHTML($("verdictLegend"), V.map(([k, c]) => `<span><i class="sq" style="background:var(${c})"></i>${k} <b style="color:var(--ink)">${s.verdicts[k] || 0}</b></span>`).join(""));
+  setHTML($("layaStats"), [["Backend", L.backend || "–"], ["Errors", L.errors], ["Raised severity", L.upgraded], ["Lowered severity", L.downgraded],
+    ["Input tokens", compact(L.tokens)], ["Awaiting triage", s.pending]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join(""));
   bars($("bCats"), Object.entries(s.categories), "--s-orange", v => nf.format(v));
   bars($("bProto"), Object.entries(s.proto), "--s-blue", compact);
-  $("tRemote").innerHTML = s.remote.length ? s.remote.map(r => `<tr><td class="strong">${esc(r.ip)}</td><td>${esc(r.name || "–")}${r.service ? ` <span class="svc">${esc(r.service)}</span>` : ""}</td><td class="num">${bytes(r.bytes)}</td></tr>`).join("")
-    : '<tr><td colspan="3" class="empty">No internet traffic yet.</td></tr>';
-  $("tDomains").innerHTML = s.domains.length ? s.domains.map(r => `<tr><td class="strong">${esc(r.domain)}</td><td>${r.service ? esc(r.service) : '<span class="svc">unknown</span>'}</td><td class="num">${nf.format(r.queries)}</td></tr>`).join("")
-    : '<tr><td colspan="3" class="empty">No DNS lookups yet.</td></tr>';
-  $("foot").textContent = `Laya Packet Analyser · ${L.url ? "Laya at " + L.url : "no Laya server"} · up ${Math.round(s.uptime)} s · served on loopback only`;
+  setHTML($("tRemote"), s.remote.length ? s.remote.map(r => `<tr><td class="strong">${esc(r.ip)}</td><td>${esc(r.name || "–")}${r.service ? ` <span class="svc">${esc(r.service)}</span>` : ""}</td><td class="num">${bytes(r.bytes)}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">No internet traffic yet.</td></tr>');
+  setHTML($("tDomains"), s.domains.length ? s.domains.map(r => `<tr><td class="strong">${esc(r.domain)}</td><td>${r.service ? esc(r.service) : '<span class="svc">unknown</span>'}</td><td class="num">${nf.format(r.queries)}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">No DNS lookups yet.</td></tr>');
+  setText($("foot"), `Laya Packet Analyser · ${L.url ? "Laya at " + L.url : "no Laya server"} · up ${Math.round(s.uptime)} s · served on loopback only`);
   const und = Object.values(tot.undecoded || {}).reduce((a, b) => a + b, 0);
-  $("health").innerHTML = [["Frames read", nf.format(tot.packets)], ["Decoded (unique)", nf.format(tot.decoded)],
+  setHTML($("health"), [["Frames read", nf.format(tot.packets)], ["Decoded (unique)", nf.format(tot.decoded)],
     ["Duplicate copies dropped", nf.format(tot.duplicates || 0)], ["Undecoded frames", nf.format(und)],
-    ["Processing errors", nf.format(tot.errors || 0)], ["Own traffic excluded", nf.format(tot.self_excluded || 0)], ["Status", s.status]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join("");
-  $("log").innerHTML = (s.log || []).slice(-8).reverse().map(l => `<div><span class="svc">${clock(l.t)}</span> ${esc(l.msg)}</div>`).join("");
-  render(); renderFeed(); renderReview();
+    ["Processing errors", nf.format(tot.errors || 0)], ["Own traffic excluded", nf.format(tot.self_excluded || 0)], ["Status", s.status]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join(""));
+  setHTML($("log"), (s.log || []).slice(-8).reverse().map(l => `<div><span class="svc">${clock(l.t)}</span> ${esc(l.msg)}</div>`).join(""));
+  if (document.hidden) return;                                   // catch up when the tab is visible again
+  if (s.series.length) render();
+  renderFeed(); renderReview();
 }
 
 // ---------------------------------------------------------------- Laya call inspector
@@ -616,18 +652,16 @@ const PURPOSE_COLOR = { "conversation review": "--s-violet", "conversation categ
   "domain check": "--s-blue", "device review": "--s-magenta" };
 let calls = [], lastCallId = 0, callFilter = "", callSearch = "", callPaused = false, openCalls = new Set();
 document.querySelectorAll("#callFilter button").forEach(b => b.onclick = () => {
-  document.querySelectorAll("#callFilter button").forEach(x => x.setAttribute("aria-pressed", x === b)); callFilter = b.dataset.v; renderCalls();
+  document.querySelectorAll("#callFilter button").forEach(x => x.setAttribute("aria-pressed", x === b)); callFilter = b.dataset.v; rebuildCalls();
 });
-$("callSearch").addEventListener("input", e => { callSearch = e.target.value.toLowerCase(); renderCalls(); });
+let searchTimer = null;
+$("callSearch").addEventListener("input", e => {                 // debounce: re-filter once typing pauses
+  clearTimeout(searchTimer); searchTimer = setTimeout(() => { callSearch = e.target.value.toLowerCase(); rebuildCalls(); }, 200);
+});
 $("callPause").onclick = () => {
   callPaused = !callPaused; $("callPause").setAttribute("aria-pressed", callPaused);
-  $("callPause").textContent = callPaused ? "▶ Resume" : "❚❚ Pause"; if (!callPaused) renderCalls();
+  $("callPause").textContent = callPaused ? "▶ Resume" : "❚❚ Pause"; if (!callPaused) rebuildCalls();
 };
-$("calls").addEventListener("click", e => {
-  const row = e.target.closest(".call-row"); if (!row) return;
-  const el = row.parentElement, id = +el.dataset.id;
-  openCalls.has(id) ? openCalls.delete(id) : openCalls.add(id); el.classList.toggle("open");
-});
 function answerCards(req, resp) {
   const qs = (req && req.questions) || {}, ans = (resp && resp.answers) || {};
   return Object.entries(ans).map(([qid, a]) => {
@@ -647,39 +681,81 @@ function answerCards(req, resp) {
   }).join("");
 }
 const pbar = (k, v) => `<div class="pbar"><span>${esc(k)}</span><span class="tr"><span style="width:${Math.round(v * 100)}%"></span></span><span class="v">${(v * 100).toFixed(0)}%</span></div>`;
-function renderCalls() {
-  if (callPaused) return;
-  const list = calls.filter(c => (!callFilter || (c.purpose || "").startsWith(callFilter)) &&
-    (!callSearch || JSON.stringify([c.subject, c.summary, c.request && c.request.state]).toLowerCase().includes(callSearch)))
-    .slice(-150).reverse();
-  const n = calls.length, errs = calls.filter(c => c.error).length, withMs = calls.filter(c => c.ms != null);
-  const avg = withMs.length ? withMs.reduce((a, c) => a + c.ms, 0) / withMs.length : null;
-  $("callStats").innerHTML = [["Calls shown (latest " + n + ")", nf.format(list.length)], ["Average latency", ms(avg)],
-    ["Errors", nf.format(errs)], ["Backend", (calls[n - 1] || {}).backend || "–"]].map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join("");
-  if (!list.length) { $("calls").innerHTML = `<div class="empty">${n ? "No calls match this filter." : "No Laya calls yet."}</div>`; return; }
-  $("calls").innerHTML = list.map(c => {
-    const col = PURPOSE_COLOR[c.purpose] || "--muted";
-    const meta = c.error ? `<pre>${esc(c.error)}</pre>` :
-      `<div class="svc" style="margin-bottom:8px">${esc(c.backend || "")} · round trip ${ms(c.ms)} · server ${ms(c.server_ms)} · ${nf.format(c.tokens || 0)} input tokens · ${esc(c.url || "")}</div>`;
-    return `<div class="call${openCalls.has(c.id) ? " open" : ""}" data-id="${c.id}">
-      <div class="call-row"><span class="t">${clock(c.wall)}</span>
-        <span class="purpose"><i style="background:var(${col})"></i>${esc(c.purpose || "call")}</span>
-        <span class="subj" title="${esc(c.subject)}">${esc(c.subject || "")}</span>
-        <span class="ans" title="${esc(c.summary)}">${c.error ? "error" : esc(c.summary)}</span>
-        <span class="ms">${c.ms == null ? "–" : Math.round(c.ms) + " ms"}</span><span class="chev">›</span></div>
-      <div class="call-body">
-        <div><h3>Request</h3><pre>${esc(JSON.stringify(c.request, null, 2))}</pre></div>
-        <div><h3>Response</h3>${meta}${c.response ? `<div class="answer-cards">${answerCards(c.request, c.response)}</div><pre>${esc(JSON.stringify(c.response, null, 2))}</pre>` : ""}</div>
-      </div></div>`;
-  }).join("");
+// Incremental: new calls are prepended as small summary rows; the request/response detail is built on first open.
+const MAX_CALL_ROWS = 150;
+let callStat = { n: 0, errs: 0, msSum: 0, msN: 0, backend: "–" }, callById = new Map(), shownCalls = 0, callsBuffered = false;
+const callMatches = c => (!callFilter || (c.purpose || "").startsWith(callFilter)) &&
+  (!callSearch || (c._text || (c._text = JSON.stringify([c.subject, c.summary, c.request && c.request.state]).toLowerCase())).includes(callSearch));
+function callRow(c) {
+  const col = PURPOSE_COLOR[c.purpose] || "--muted", el = document.createElement("div");
+  el.className = "call" + (openCalls.has(c.id) ? " open" : ""); el.dataset.id = c.id;
+  el.innerHTML = `<div class="call-row"><span class="t">${clock(c.wall)}</span>
+      <span class="purpose"><i style="background:var(${col})"></i>${esc(c.purpose || "call")}</span>
+      <span class="subj" title="${esc(c.subject)}">${esc(c.subject || "")}</span>
+      <span class="ans" title="${esc(c.summary)}">${c.error ? "error" : esc(c.summary)}</span>
+      <span class="ms">${c.ms == null ? "–" : Math.round(c.ms) + " ms"}</span><span class="chev">›</span></div>
+    <div class="call-body"></div>`;
+  if (openCalls.has(c.id)) fillCallBody(el, c);
+  return el;
 }
+function fillCallBody(el, c) {
+  const body = el.querySelector(".call-body"); if (body.dataset.built) return;
+  const meta = c.error ? `<pre>${esc(c.error)}</pre>` :
+    `<div class="svc" style="margin-bottom:8px">${esc(c.backend || "")} · round trip ${ms(c.ms)} · server ${ms(c.server_ms)} · ${nf.format(c.tokens || 0)} input tokens · ${esc(c.url || "")}</div>`;
+  body.innerHTML = `<div><h3>Request</h3><pre>${esc(JSON.stringify(c.request, null, 2))}</pre></div>
+    <div><h3>Response</h3>${meta}${c.response ? `<div class="answer-cards">${answerCards(c.request, c.response)}</div><pre>${esc(JSON.stringify(c.response, null, 2))}</pre>` : ""}</div>`;
+  body.dataset.built = "1";
+}
+function renderCallStats() {
+  const st = callStat;
+  setHTML($("callStats"), [["Calls shown (latest " + nf.format(calls.length) + ")", nf.format(shownCalls)],
+    ["Average latency", ms(st.msN ? st.msSum / st.msN : null)], ["Errors", nf.format(st.errs)], ["Backend", st.backend]]
+    .map(([k, v]) => `<div><span>${k}</span><span>${esc(v)}</span></div>`).join(""));
+}
+function emptyCalls() {
+  setHTML($("calls"), `<div class="empty">${calls.length ? "No calls match this filter." : "No Laya calls yet."}</div>`);
+}
+function rebuildCalls() {                                           // filter / search / resume: redraw the list once
+  if (callPaused) return;
+  const box = $("calls"), list = calls.filter(callMatches).slice(-MAX_CALL_ROWS).reverse();
+  shownCalls = list.length; callsBuffered = false; _html.delete(box); box.textContent = "";
+  if (!list.length) emptyCalls(); else { const f = document.createDocumentFragment(); list.forEach(c => f.appendChild(callRow(c))); box.appendChild(f); }
+  renderCallStats();
+}
+function addCalls(fresh) {
+  for (const c of fresh) {
+    callStat.n++; if (c.error) callStat.errs++;
+    if (c.ms != null) { callStat.msSum += c.ms; callStat.msN++; }
+    if (c.backend) callStat.backend = c.backend;
+    callById.set(c.id, c);
+  }
+  calls = calls.concat(fresh);
+  if (calls.length > 500) { calls.splice(0, calls.length - 500).forEach(c => callById.delete(c.id)); }
+  if (callPaused || document.hidden) { callsBuffered = true; renderCallStats(); return; }
+  if (callsBuffered) return rebuildCalls();
+  const box = $("calls"), match = fresh.filter(callMatches);
+  if (match.length) {
+    if (!box.querySelector(".call")) { _html.delete(box); box.textContent = ""; }
+    const f = document.createDocumentFragment();
+    for (let k = match.length - 1; k >= 0; k--) f.appendChild(callRow(match[k]));   // newest first
+    box.insertBefore(f, box.firstChild);
+    while (box.children.length > MAX_CALL_ROWS) box.lastElementChild.remove();
+    shownCalls = box.querySelectorAll(".call").length;
+  } else if (!box.querySelector(".call")) emptyCalls();
+  renderCallStats();
+}
+$("calls").addEventListener("click", e => {
+  const row = e.target.closest(".call-row"); if (!row) return;
+  const el = row.parentElement, id = +el.dataset.id, c = callById.get(id);
+  if (openCalls.has(id)) openCalls.delete(id); else { openCalls.add(id); if (c) fillCallBody(el, c); }
+  el.classList.toggle("open");
+});
 async function pollCalls() {
   try {
     const r = await (await fetch("/api/calls?after=" + lastCallId, { cache: "no-store" })).json();
     if (!r.enabled) $("callsCard").style.display = "none";
-    if (r.calls.length) {
-      calls = calls.concat(r.calls).slice(-500); lastCallId = r.calls[r.calls.length - 1].id; renderCalls();
-    } else if (!calls.length) renderCalls();
+    if (r.calls.length) { lastCallId = r.calls[r.calls.length - 1].id; addCalls(r.calls); }
+    else if (!calls.length) { emptyCalls(); renderCallStats(); }
   } catch (e) {}
   setTimeout(pollCalls, 1000);
 }
@@ -694,7 +770,10 @@ async function poll() {
   }
   setTimeout(poll, 1000);
 }
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { _css = {}; render(true); });
+document.addEventListener("visibilitychange", () => {                // redraw everything once when the tab comes back
+  if (!document.hidden) { render(true); feedSig = rvSig = null; renderFeed(); renderReview(); rebuildCalls(); }
+});
 poll();
 </script>
 </body>
